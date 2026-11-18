@@ -9,6 +9,8 @@ from typing import Any
 from application.search.context_manager import ConversationHistory, DialogueTurn
 from application.search.slot_classifier import SlotClassifier, _determine_template, _detect_ambiguity
 from application.search.slot_search_executor import SlotSearchExecutor
+
+#from application.search.ordinal_resolver import parse_ordinal, OUT_OF_RANGE_TEMPLATE
 from utils.error_logger import log_nlu_miss
 
 logger = logging.getLogger(__name__)
@@ -26,9 +28,21 @@ _FEATURE_CLEAR_RE = re.compile(
     re.IGNORECASE,
 )
 
+_STOP_WORDS = {
+    "а", "и", "но", "да", "нет", "ну", "вот", "же", "ли", "бы", "уже", "ещё", "еще",
+    "мне", "тебе", "вам", "нас", "вас", "это", "этот", "эта", "эти", "то", "так",
+    "очень", "просто", "всё", "все", "хорошо", "ок", "окей", "ладно",
+}
+_SEARCH_MARKERS = {
+    "покажи", "покажите", "показать", "найди", "найдите", "найти",
+    "расскажи", "расскажите", "рассказать", "подскажи", "подскажите",
+    "где", "когда", "почему", "сколько", "какой", "какая", "какие", "каких",
+    "режим", "расписание", "билет", "билеты", "цена", "стоимость",
+    "контакт", "контакты", "телефон", "адрес", "как добраться",
+    "карта", "карте", "фото", "фотография",
+}
 
-def _should_clear_features(query: str) -> bool:
-    return bool(_FEATURE_CLEAR_RE.search(query))
+
 
 
 # ── Контекстный мердж ─────────────────────────────────────────────────────────
@@ -48,9 +62,15 @@ def _merge_with_context(new_slots: dict, prev: DialogueTurn, query: str) -> tupl
     prev_synonym = prev_slots.get("synonym")
     prev_obj_type = prev_slots.get("object_type")
 
+    new_props = new_slots.get("properties") or {}
+    new_extra = new_slots.get("extra") or {}
+    new_features = new_slots.get("features") or {}
+    new_has_filters = bool(new_props) or bool(new_extra) or bool(new_features)
+
     can_inherit = (
-        new_synonym is None
-        and (new_obj_type is None or new_obj_type == prev_obj_type)
+            new_synonym is None
+            and not new_has_filters
+            and (new_obj_type is None or new_obj_type == prev_obj_type)
     )
 
     if not can_inherit:
@@ -168,6 +188,80 @@ def _truncate_entity(name: str, max_len: int = 50) -> str:
     return name[:max_len] if name else name
 
 
+def _attach_db_ids(items: list[str], objects: list[dict]) -> list[dict]:
+    enriched: list[dict] = []
+    lowered = [
+        (str(o.get("name") or "").strip().lower(), str(o.get("db_id") or ""))
+        for o in (objects or [])
+        if o.get("name") and o.get("db_id")
+    ]
+    for text in items:
+        item_text = (text or "").strip()
+        item_low = item_text.lower()
+        db_id = ""
+        for name, obj_db_id in lowered:
+            if len(name) >= 4 and name in item_low:
+                db_id = obj_db_id
+                break
+        enriched.append({"text": item_text, "db_id": db_id})
+    return enriched
+
+
+def _items_from_objects(answer: str, objects: list[dict]) -> list[dict]:
+    text_low = (answer or "").lower()
+    if not text_low:
+        return []
+
+    found: list[tuple[int, str, str]] = []
+    for obj in objects or []:
+        name = str(obj.get("name") or "").strip()
+        db_id = str(obj.get("db_id") or "")
+
+        if len(name) < 4:
+            continue
+        pos = text_low.find(name.lower())
+        if pos < 0:
+            continue
+        found.append((pos, name, db_id))
+
+    if len(found) < 2:
+        return []
+
+    found.sort(key=lambda x: x[0])
+    return [{"text": name, "db_id": db_id} for _, name, db_id in found]
+
+
+
+def _slots_from_list_item(item: dict, modality: str, snapshot: dict) -> dict:
+    text = (item.get("text") or "").strip()
+    db_id = item.get("db_id") or ""
+    object_type = snapshot.get("object_type") or "Объект флоры и фауны"
+
+    slots: dict = {
+        "object_type": object_type,
+        "synonym": None,
+        "properties": {},
+        "features": {},
+        "extra": {},
+        "modality": modality,
+        "template": None,
+        "modality_ambiguous": False,
+        "from_list": True,
+        "list_item_text": text,
+    }
+
+    if db_id:
+        slots["promo_db_id"] = db_id
+        slots["promo_name"] = text
+    else:
+
+        name = text.split(":")[0].strip()
+        name = re.sub(r"^\d+[.)]\s*", "", name)
+        slots["synonym"] = name[:100] if name else None
+
+    return slots
+
+
 # ── Оркестратор ───────────────────────────────────────────────────────────────
 
 class DialogueOrchestrator:
@@ -183,10 +277,15 @@ class DialogueOrchestrator:
         self._history = history
         self._redis = redis_client
 
-    async def process(self, query: str, user_id: str | None = None, promo_enabled: bool | None = None) -> dict:
+
+    async def process(self, query: str, user_id: str | None = None, promo_enabled: bool | None = None,
+                      multi_act_enabled: bool | None = None) -> dict:
         """Полный цикл: классификация → мердж контекста → поиск → проактивность."""
         t0 = time.monotonic()
-        turns = await self._history.get_turns(user_id) if user_id else []
+
+
+        multi_act = multi_act_enabled if multi_act_enabled is not None else True
+        turns = await self._history.get_turns(user_id) if (user_id and multi_act) else []
         prev = turns[-1] if turns else None
 
         # Передаём предыдущий запрос и промо в LLM — для разрешения местоимений
@@ -223,7 +322,10 @@ class DialogueOrchestrator:
             f"continuation={is_continuation}"
         )
 
-        result = await self._execute_and_finalize(query, slots, user_id, is_continuation, promo_enabled=promo_enabled, prev_query=prev.query if prev else None)
+        result = await self._execute_and_finalize(query, slots, user_id, is_continuation,
+                                                  promo_enabled=promo_enabled,
+                                                  prev_query=prev.query if prev else None,
+                                                  multi_act=multi_act)
         exec_timing = result.get("timing", {})
         result["timing"] = {
             "classify_ms": classify_ms,
@@ -251,6 +353,7 @@ class DialogueOrchestrator:
         is_continuation: bool,
         promo_enabled: bool | None = None,
         prev_query: str | None = None,
+        multi_act: bool = True,
     ) -> dict:
         t_search = time.monotonic()
         log_context = {"current_query": query, "prev_query": prev_query}
@@ -275,13 +378,14 @@ class DialogueOrchestrator:
         )
         proactive = _build_proactive(slots, result, has_db_content)
 
-        if user_id:
+        if user_id and multi_act:
             await self._history.add_turn(user_id, DialogueTurn(
                 query=query,
                 slots=slots,
                 had_results=_has_content(result),
                 promo_objects=result.get("promo") or [],
             ))
+
 
         pipeline_result["proactive"] = proactive
         pipeline_result["modality_ambiguous"] = slots.get("modality_ambiguous", False)

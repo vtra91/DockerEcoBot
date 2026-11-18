@@ -7,8 +7,14 @@ import time
 from typing import Any
 
 from application.search.context_manager import ConversationHistory, DialogueTurn
+from application.search.continuation import ContinuationCursor, ContinuationStore
 from application.search.slot_classifier import SlotClassifier, _determine_template, _detect_ambiguity
-from application.search.slot_search_executor import SlotSearchExecutor
+from application.search.slot_search_executor import (
+    IMAGE_PAGE_SIZE,
+    OBJECT_PAGE_SIZE,
+    TEXT_PAGE_SIZE,
+    SlotSearchExecutor,
+)
 
 #from application.search.ordinal_resolver import parse_ordinal, OUT_OF_RANGE_TEMPLATE
 from utils.error_logger import log_nlu_miss
@@ -276,7 +282,7 @@ class DialogueOrchestrator:
         self._executor = executor
         self._history = history
         self._redis = redis_client
-
+        self._continuation = ContinuationStore(redis_client)
 
     async def process(self, query: str, user_id: str | None = None, promo_enabled: bool | None = None,
                       multi_act_enabled: bool | None = None) -> dict:
@@ -378,6 +384,8 @@ class DialogueOrchestrator:
         )
         proactive = _build_proactive(slots, result, has_db_content)
 
+        await self._sync_continuation(user_id, query, slots, result)
+
         if user_id and multi_act:
             await self._history.add_turn(user_id, DialogueTurn(
                 query=query,
@@ -438,6 +446,291 @@ class DialogueOrchestrator:
             )
 
         return found
+
+    # ── «Покажи ещё» ──────────────────────────────────────────────────────────
+    @staticmethod
+    def _cursor_from_more(query: str, slots: dict, more: dict) -> ContinuationCursor:
+        """Превращает блок `more` из результата в курсор для Redis."""
+        kind = more.get("kind")
+        if kind in ("objects", "place"):
+            object_offset = int(more.get("next_object_offset") or 0)
+        else:
+            # Картинки/тексты листаются внутри текущей страницы объектов.
+            object_offset = int(more.get("object_offset") or 0)
+        return ContinuationCursor(
+            kind=kind,
+            query=query,
+            slots=slots,
+            object_offset=object_offset,
+            object_limit=int(more.get("object_limit") or OBJECT_PAGE_SIZE),
+            object_has_more=bool(more.get("object_has_more")),
+            resource_offset=int(more.get("next_resource_offset") or 0),
+            shown=int(more.get("shown") or 0),
+            total=int(more.get("total") or 0),
+        )
+
+    async def _sync_continuation(self, user_id: str | None, query: str, slots: dict, result: dict) -> None:
+        """После обычного ответа сохраняет/сбрасывает курсор «Покажи ещё»."""
+        if not user_id:
+            return
+        more = result.get("more") or {}
+        if more.get("has_more"):
+            await self._continuation.save(
+                user_id, self._cursor_from_more(query, slots, more)
+            )
+        else:
+            await self._continuation.clear(user_id)
+
+    async def _apply_more(self, user_id: str, cursor: ContinuationCursor, result: dict) -> None:
+        """После нажатия кнопки обновляет курсор по новому блоку `more`."""
+        more = result.get("more") or {}
+        if result.get("error"):
+            return
+        if more.get("has_more"):
+            await self._continuation.save(
+                user_id, self._cursor_from_more(cursor.query, cursor.slots, more)
+            )
+        else:
+            await self._continuation.clear(user_id)
+
+    async def _run_page(
+            self,
+            cursor: ContinuationCursor,
+            *,
+            object_offset: int,
+            object_limit: int | None = None,
+            resource_offset: int = 0,
+            resource_limit: int | None = None,
+            use_llm_answer: bool = False,
+            include_resources: bool = True,
+    ) -> dict:
+        """Выполняет одну страницу продолжения без классификации и без промо."""
+        pipe = await self._executor.execute(
+            cursor.query,
+            cursor.slots,
+            user_id=None,
+            promo_enabled=False,
+            object_offset=object_offset,
+            object_limit=object_limit or cursor.object_limit,
+            resource_offset=resource_offset,
+            resource_limit=resource_limit,
+            use_llm_answer=use_llm_answer,
+            include_resources=include_resources,
+        )
+        result = pipe.get("result") or {}
+        result["is_more_page"] = True
+        # Для отладочной панели AdminPanel.
+        result["slots"] = pipe.get("slots")
+        result["search"] = pipe.get("search")
+        result["search_request"] = pipe.get("search_request")
+        return result
+
+    async def continue_previous(self, user_id: str) -> dict | None:
+        """Возвращает следующую порцию прошлого ответа.
+
+        None означает, что кнопка устарела (курсор истёк или запрос был новый).
+        """
+        t0 = time.monotonic()
+        cursor = await self._continuation.get(user_id)
+        if not cursor:
+            logger.info(f"[MORE] Курсор не найден [{user_id}]")
+            return None
+
+        logger.info(
+            f"[MORE] [{user_id}] kind={cursor.kind} "
+            f"shown={cursor.shown}/{cursor.total} "
+            f"object_offset={cursor.object_offset} "
+            f"resource_offset={cursor.resource_offset}"
+        )
+
+        try:
+            if cursor.kind == "images":
+                result = await self._continue_images(cursor)
+            elif cursor.kind == "text":
+                result = await self._continue_text(cursor)
+            elif cursor.kind == "objects":
+                result = await self._continue_objects(cursor)
+            elif cursor.kind == "place":
+                result = await self._continue_place(cursor)
+            else:
+                logger.warning(f"[MORE] Неизвестный тип курсора: {cursor.kind}")
+                await self._continuation.clear(user_id)
+                return None
+        except Exception as e:
+            logger.error(f"[MORE] Ошибка продолжения [{user_id}]: {e}", exc_info=True)
+            return None
+
+        result["is_continuation"] = True
+        result["timing"] = {**(result.get("timing") or {}), "total_ms": _ms(t0)}
+        await self._apply_more(user_id, cursor, result)
+
+        # Возвращаем в том же формате, что и /search_pipeline,
+        # чтобы презентеры MAX и AdminPanel не знали разницы.
+        return {
+            "result": result,
+            "proactive": {},
+            "simplifications": [],
+            "modality_ambiguous": False,
+            "slots": result.get("slots") or cursor.slots,
+            "search": result.get("search"),
+            "search_request": result.get("search_request"),
+            "is_continuation": True,
+            "timing": result["timing"],
+        }
+
+    async def _continue_images(self, cursor: ContinuationCursor) -> dict:
+        """Следующие 3 картинки. При исчерпании — переход к следующей странице объектов."""
+        object_offset = cursor.object_offset
+        resource_offset = cursor.resource_offset
+        result: dict = {}
+
+        # Не больше 5 переходов между страницами объектов за одно нажатие.
+        for _ in range(5):
+            result = await self._run_page(
+                cursor,
+                object_offset=object_offset,
+                object_limit=cursor.object_limit,
+                resource_offset=resource_offset,
+                resource_limit=IMAGE_PAGE_SIZE,
+                use_llm_answer=False,
+            )
+            images = result.get("images") or []
+            more = result.get("more") or {}
+            if images:
+                break
+            if not more.get("object_has_more"):
+                break
+            next_object = int(more.get("next_object_offset") or 0)
+            if next_object <= object_offset:
+                break
+            object_offset = next_object
+            resource_offset = 0
+
+        if result.get("error"):
+            return result
+        if not (result.get("images") or []):
+            result["answer"] = "Больше изображений по этому запросу нет."
+            result["more"] = None
+        return result
+
+    async def _continue_text(self, cursor: ContinuationCursor) -> dict:
+        """Следующий текстовый фрагмент из базы знаний.
+
+        Если тексты для текущей страницы объектов закончились, переходим
+        к следующей странице объектов и начинаем её тексты с первого.
+        """
+        object_offset = cursor.object_offset
+        resource_offset = cursor.resource_offset
+        result: dict = {}
+        answer = ""
+
+        for _ in range(5):
+            result = await self._run_page(
+                cursor,
+                object_offset=object_offset,
+                object_limit=cursor.object_limit,
+                resource_offset=resource_offset,
+                resource_limit=TEXT_PAGE_SIZE,
+                use_llm_answer=False,
+            )
+            answer = (result.get("answer") or "").strip()
+            more = result.get("more") or {}
+            if answer:
+                break
+            # Пустой фрагмент — пробуем следующий ресурс, не показывая пустоту.
+            next_resource = int(more.get("next_resource_offset") or 0)
+            if next_resource > resource_offset and more.get("has_more"):
+                resource_offset = next_resource
+                continue
+            if not more.get("object_has_more"):
+                break
+            next_object = int(more.get("next_object_offset") or 0)
+            if next_object <= object_offset:
+                break
+            object_offset = next_object
+            resource_offset = 0
+
+        if result.get("error"):
+            return result
+        if not answer:
+            result["answer"] = "Больше информации по этой теме нет."
+            result["more"] = None
+            return result
+
+        more = result.get("more") or {}
+        title = (result.get("text_title") or "").strip()
+        header = "📖 Дополнительная информация"
+        if title:
+            header += f": {title}"
+        if more:
+            header += f"\nФрагмент {more.get('shown', cursor.shown + 1)} из {more.get('total', cursor.total)}"
+
+        result["answer"] = f"{header}\n\n{answer}"
+        return result
+
+    async def _continue_objects(self, cursor: ContinuationCursor) -> dict:
+        """Следующая страница найденных объектов — списком."""
+        result = await self._run_page(
+            cursor,
+            object_offset=cursor.object_offset,
+            object_limit=cursor.object_limit,
+            resource_offset=0,
+            resource_limit=0,
+            use_llm_answer=False,
+            include_resources=False,
+        )
+        items = result.get("objects") or []
+        more = result.get("more") or {}
+
+        if result.get("error"):
+            return result
+        if not items:
+            result["answer"] = "Больше объектов по этому запросу нет."
+            result["more"] = None
+            return result
+
+        start = cursor.object_offset + 1
+        end = cursor.object_offset + len(items)
+        total = more.get("total", cursor.total)
+        lines = "\n".join(
+            f"{start + i}. {item.get('name') or '—'}"
+            for i, item in enumerate(items)
+        )
+        result["answer"] = f"Ещё объекты ({start}–{end} из {total}):\n\n{lines}"
+        return result
+
+    async def _continue_place(self, cursor: ContinuationCursor) -> dict:
+        """Следующая страница объектов рядом с местом + новая карта."""
+        result = await self._run_page(
+            cursor,
+            object_offset=cursor.object_offset,
+            object_limit=cursor.object_limit,
+            resource_offset=0,
+            resource_limit=0,
+            use_llm_answer=False,
+            include_resources=False,
+        )
+        items = result.get("objects") or []
+        more = result.get("more") or {}
+
+        if result.get("error"):
+            return result
+        if not items:
+            result["answer"] = "Больше объектов рядом с этим местом нет."
+            result["more"] = None
+            return result
+
+        start = cursor.object_offset + 1
+        end = cursor.object_offset + len(items)
+        total = result.get("total_found", more.get("total", cursor.total))
+        place = result.get("place") or ""
+        where = f" рядом с местом «{place}»" if place else ""
+        lines = "\n".join(
+            f"{start + i}. {item.get('name') or '—'}"
+            for i, item in enumerate(items)
+        )
+        result["answer"] = f"Ещё объекты{where} ({start}–{end} из {total}):\n\n{lines}"
+        return result
 
     async def load_simplification(self, user_id: str, idx: int) -> dict | None:
         """Загружает сохранённый вариант упрощения по индексу."""

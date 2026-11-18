@@ -45,6 +45,12 @@ class SearchUseCase:
 
         resources: List[ResourceResult] = []
         total_resources = 0
+        resource_limit = (
+            request.resource_limit
+            if request.resource_limit is not None
+            else request.limit * 2
+        )
+        resource_offset = max(0, request.resource_offset or 0)
         if request.object and not objects:
             debug['resources_query_time'] = 0.0
             debug['resources_skipped'] = True
@@ -53,7 +59,8 @@ class SearchUseCase:
             resource_criteria = request.resource if request.resource else ResourceCriteria()
             res_start = time.time()
             resources, total_resources = self._repository.find_resources_by_criteria(
-                resource_criteria, object_ids, limit=request.limit * 2, offset=request.offset
+                resource_criteria, object_ids,
+                limit=resource_limit, offset=resource_offset
             )
             res_raw_time = time.time() - res_start
             debug['resources_query_time_raw'] = res_raw_time
@@ -125,6 +132,18 @@ class SearchUseCase:
                 next_offset=next_offset,
                 has_more=has_more
             )
+        # Пагинация по ресурсам: сколько всего картинок/текстов у найденных объектов и с какого смещения начинать следующую порцию
+        resources_pagination = None
+        if request.object and resource_limit > 0:
+            res_page_limit = min(resource_limit, request.limit)
+            next_res_offset = resource_offset + len(resources)
+            resources_pagination = Pagination(
+                total=total_resources,
+                limit=res_page_limit,
+                offset=resource_offset,
+                next_offset=next_res_offset,
+                has_more=next_res_offset < total_resources,
+            )
 
         total_time = time.time() - total_start
         debug['total_time'] = total_time
@@ -139,6 +158,7 @@ class SearchUseCase:
             total_objects=total_objects,
             total_resources=total_resources,
             pagination=pagination,
+            resources_pagination=resources_pagination,
         )
 
         if request.debug:

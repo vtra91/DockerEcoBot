@@ -322,7 +322,12 @@ async def callback_proxy(request: Request, data: dict = Body(...)):
     promo_enabled = promo_val != "0"
     async with httpx.AsyncClient(timeout=httpx.Timeout(150.0)) as client:
         try:
-            if payload.startswith("simplify:"):
+            if payload == "more:next":
+                response = await client.post(
+                    f"{CORE_API_BASE}/callback_more",
+                    json={"user_id": user_id}
+                )
+            elif payload.startswith("simplify:"):
                 idx = int(payload.removeprefix("simplify:"))
                 response = await client.post(
                     f"{CORE_API_BASE}/callback_simplify",

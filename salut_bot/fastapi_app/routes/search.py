@@ -67,6 +67,8 @@ class SystemParameters(BaseModel):
     clean_user_query: Optional[str] = None
     limit: int = 20
     offset: int = 0
+    resource_offset: int = 0
+    resource_limit: Optional[int] = None
     debug: bool = False
     use_llm_answer: bool = False
 
@@ -89,6 +91,8 @@ async def search(request_data: SearchRequestSchema):
         sys_params = data.get('system_parameters', {})
         limit = sys_params.get('limit', data.get('limit', 20))
         offset = sys_params.get('offset', data.get('offset', 0))
+        resource_offset = sys_params.get('resource_offset', data.get('resource_offset', 0))
+        resource_limit = sys_params.get('resource_limit', data.get('resource_limit'))
         debug = sys_params.get('debug', data.get('debug', False))
         use_llm = sys_params.get('use_llm_answer', data.get('use_llm_answer', False))
         user_query = sys_params.get('user_query', data.get('user_query'))
@@ -150,6 +154,8 @@ async def search(request_data: SearchRequestSchema):
             modality_type=search_params.get('modality_type'),
             limit=limit,
             offset=offset,
+            resource_offset=resource_offset,
+            resource_limit=resource_limit,
             debug=debug,
             use_llm_answer=use_llm,
             user_query=user_query,

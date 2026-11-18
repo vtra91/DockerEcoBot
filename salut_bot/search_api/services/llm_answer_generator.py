@@ -17,6 +17,30 @@ class LLMAnswerGenerator:
             self._llm = get_llm()
         return self._llm
 
+    def generate_smalltalk(self, question: str) -> Dict[str, Any]:
+        """Генерация ответа на смолток: без контекста, без БД, без векторного поиска."""
+        llm = self._get_llm()
+        prompt_text = self._smalltalk_prompt().format(question=question)
+        try:
+            response = llm.invoke(prompt_text)
+            content = response.content.strip() if hasattr(response, "content") else str(response)
+            return {"content": content, "finish_reason": None, "success": bool(content)}
+        except Exception as e:
+            logger.error(f"Smalltalk generation error: {e}")
+            return {"content": "", "finish_reason": "error", "success": False}
+
+    def _smalltalk_prompt(self) -> str:
+        return (
+            "Ты — Экоассистент Байкальского музея СО РАН. "
+            "Пользователь отправил сообщение, не являющееся запросом об объекте, месте или услуге. "
+            "Ответь дружелюбно и кратко (1–3 предложения). "
+            "Если поздоровался — поздоровайся, расскажи, кто ты, и предложи спросить о флоре, фауне или местах Байкала. "
+            "Если благодарит — ответь «пожалуйста» и предложи продолжить. "
+            "Если выражает эмоцию («прикольно», «класс», «интересно») — поддержи и свяжи с разнообразием природы Байкала. "
+            "Не выдумывай факты о Байкале, если вопрос не про смолток.\n\n"
+            "Сообщение: {question}\n\nОтвет:"
+        )
+    
     def generate(self, question: str, objects: List[ObjectResult],
                  resources: List[ResourceResult]) -> Dict[str, Any]:
         context = self._build_context(objects, resources)

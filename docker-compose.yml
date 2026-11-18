@@ -53,6 +53,42 @@ services:
       - "host.docker.internal:host-gateway"
     networks: [ecobot_net]
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    networks:
+      - ecobot_net
+    restart: always
+
+  rag-orchestrator:
+    build:
+      context: ./rag-orchestrator
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: eco
+      DB_USER: postgres
+      DB_PASSWORD: "Fdf78yh0a4b!"
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      EMBEDDING_MODELS_BASE_DIR: /app/embedding_models
+      EMBEDDING_MODEL: bge-m3
+    volumes:
+      - ./salut_bot/embedding_models:/app/embedding_models:ro
+    depends_on:
+      - db
+      - qdrant
+    networks:
+      - ecobot_net
+    restart: always
+    ports:
+      - "8000:8000"
+
   core-api:
     build: ./EcoBotProject/DialogService
     restart: always
@@ -150,7 +186,7 @@ services:
     expose:
       - "5050"
     volumes:
-      - ./dsapi/local_models:/app/local_models
+      - ./dsapi/local_models:/app/local_models:ro
       - ./dsapi/doc:/app/doc:ro
       - ./dsapi/prompts_structure:/app/prompts_structure:ro
       - ./dsapi/logs:/app/logs

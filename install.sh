@@ -49,8 +49,27 @@ ask "Пароль PostgreSQL (Enter = оставить из shared.env):"
 read -r -s -p "DB_PASSWORD: " DB_PASSWORD_INPUT < /dev/tty
 echo ""
 
-ask "Telegram Bot Token (Enter = оставить из shared.env):"
-read -r -s -p "BOT_TOKEN: " BOT_TOKEN_INPUT < /dev/tty
+ask "MAX Bot Token (Enter = оставить из shared.env):"
+read -r -s -p "MAX_BOT_TOKEN: " MAX_BOT_TOKEN_INPUT < /dev/tty
+echo ""
+
+ask "GigaChat Credentials (Enter = оставить из shared.env):"
+read -r -s -p "GIGACHAT_CREDENTIALS: " GIGACHAT_CREDENTIALS_INPUT < /dev/tty
+echo ""
+
+# Текущее значение модели из shared.env (если файл уже есть) — как дефолт для промпта
+CURRENT_GIGACHAT_MODEL=""
+if [[ -f "$REPO_ROOT/shared.env" ]]; then
+    CURRENT_GIGACHAT_MODEL="$(grep -E '^GIGACHAT_MODEL=' "$REPO_ROOT/shared.env" | head -n1 | cut -d= -f2- || true)"
+fi
+DEFAULT_GIGACHAT_MODEL="${CURRENT_GIGACHAT_MODEL:-GigaChat-2-Max}"
+
+ask "Модель GigaChat (Enter = $DEFAULT_GIGACHAT_MODEL):"
+read -r -p "GIGACHAT_MODEL [$DEFAULT_GIGACHAT_MODEL]: " GIGACHAT_MODEL_INPUT < /dev/tty
+GIGACHAT_MODEL_INPUT="${GIGACHAT_MODEL_INPUT:-$DEFAULT_GIGACHAT_MODEL}"
+
+ask "Sber Key Enterprise (Enter = оставить из shared.env):"
+read -r -s -p "SBER_KEY_ENTERPRICE: " SBER_KEY_ENTERPRICE_INPUT < /dev/tty
 echo ""
 
 echo ""
@@ -74,8 +93,23 @@ if [[ -n "$DB_PASSWORD_INPUT" ]]; then
     sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$DB_PASSWORD_INPUT|" "$REPO_ROOT/db_custom/.env" 2>/dev/null || true
 fi
 
-if [[ -n "$BOT_TOKEN_INPUT" ]]; then
-    sed -i "s|^BOT_TOKEN=.*|BOT_TOKEN=$BOT_TOKEN_INPUT|" "$REPO_ROOT/shared.env"
+if [[ -n "$MAX_BOT_TOKEN_INPUT" ]]; then
+    sed -i "s|^MAX_BOT_TOKEN=.*|MAX_BOT_TOKEN=$MAX_BOT_TOKEN_INPUT|" "$REPO_ROOT/shared.env"
+fi
+
+if [[ -n "$GIGACHAT_CREDENTIALS_INPUT" ]]; then
+    sed -i "s|^GIGACHAT_CREDENTIALS=.*|GIGACHAT_CREDENTIALS=$GIGACHAT_CREDENTIALS_INPUT|" "$REPO_ROOT/shared.env"
+fi
+
+# GIGACHAT_MODEL всегда имеет значение (дефолт), поэтому ключ может отсутствовать в файле — добавляем при необходимости
+if grep -q "^GIGACHAT_MODEL=" "$REPO_ROOT/shared.env"; then
+    sed -i "s|^GIGACHAT_MODEL=.*|GIGACHAT_MODEL=$GIGACHAT_MODEL_INPUT|" "$REPO_ROOT/shared.env"
+else
+    printf 'GIGACHAT_MODEL=%s\n' "$GIGACHAT_MODEL_INPUT" >> "$REPO_ROOT/shared.env"
+fi
+
+if [[ -n "$SBER_KEY_ENTERPRICE_INPUT" ]]; then
+    sed -i "s|^SBER_KEY_ENTERPRICE=.*|SBER_KEY_ENTERPRICE=$SBER_KEY_ENTERPRICE_INPUT|" "$REPO_ROOT/shared.env"
 fi
 
 log "shared.env готов"

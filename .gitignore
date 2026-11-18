@@ -116,3 +116,7 @@ tasks/
 plans/
 docs/defense_preparation.md
 docs/synonyms_interface_report.md
+
+# WSL / Windows artifacts
+*:Zone.Identifier
+*.Zone.Identifier

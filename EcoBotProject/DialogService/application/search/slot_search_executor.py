@@ -1,5 +1,6 @@
 import os
 import re
+import random
 import logging
 import aiohttp
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,9 @@ class _ApiError(Exception):
         super().__init__(f"API {status} at {url}")
 
 _NEAR_RE = re.compile(r"рядом|около|возле|недалеко|поблизости|близ", re.IGNORECASE)
+
+# Сколько фото отдавать в ответе (случайная выборка после фильтрации)
+IMAGES_PER_ANSWER = 3
 
 _LOCATION_KEYS = frozenset({"Детальное расположение", "Расположение относительно Байкала"})
 
@@ -95,6 +99,26 @@ class SlotSearchExecutor:
 
         return {"slots": slots, "search_request": search_body, "search": search_data, "result": result}
 
+    async def respond_smalltalk(self, query: str) -> str:
+        """POST /smalltalk на backend; возвращает готовый текст или '' при ошибке."""
+        own_session = self._session is None
+        sess = self._session or aiohttp.ClientSession()
+        url = f"{self._backend_url}/smalltalk"
+        try:
+            async with sess.post(url, json={"query": query}, timeout=20) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.warning(f"Smalltalk HTTP {resp.status}: {text[:200]}")
+                    return ""
+                data = await resp.json(content_type=None)
+                return (data.get("answer") or "").strip()
+        except Exception as e:
+            logger.error(f"Smalltalk call failed: {e}")
+            return ""
+        finally:
+            if own_session:
+                await sess.close()
+
     def _is_zero_result(self, slots: Dict[str, Any], result: dict, search_data: dict) -> bool:
         modality = slots.get("modality", "Текст")
         if modality == "Изображение":
@@ -153,14 +177,35 @@ class SlotSearchExecutor:
             result["answer"] = "По вашему запросу ничего не найдено."
 
         # ── Изображения ──
-        images = [
-            r["content"].get("file_path") or r["content"].get("url")
-            for r in image_res
-            if isinstance(r.get("content"), dict)
-            and (r["content"].get("file_path") or r["content"].get("url"))
-        ]
+        images = []
+        for r in image_res:
+            content = r.get("content")
+            if not isinstance(content, dict):
+                continue
+            # стоп-лист: такие фото не показываем
+            if int((r.get("features") or {}).get("В стоп-листе") or 0):
+                continue
+            url = content.get("file_path") or content.get("url")
+            if not url or url in images:
+                continue
+            images.append(url)
+        # fallback: если стоп-лист отсёк ВСЁ — показываем что есть, чтобы не отдавать пустоту
+        if not images:
+            logger.warning("All images are stop-listed — fallback to unfiltered")
+            for r in image_res:
+                content = r.get("content")
+                if not isinstance(content, dict):
+                    continue
+                url = content.get("file_path") or content.get("url")
+                if url and url not in images:
+                    images.append(url)
+        # ── ВЫБОР ФОТО: активным должен быть РОВНО ОДИН вариант ──
+        # Вариант A — фиксированные первые 3 (старое поведение, порядок из БД):
+        # if images:
+        #     result["images"] = images[:IMAGES_PER_ANSWER]
+        # Вариант B — случайные 3 (новое поведение):
         if images:
-            result["images"] = images[:5]
+            result["images"] = random.sample(images, min(IMAGES_PER_ANSWER, len(images)))
 
         # ── Карта из geo-ресурсов (/search) ──
         for r in geo_res:
@@ -190,6 +235,7 @@ class SlotSearchExecutor:
             result["objects"] = [
                 {
                     "id": obj.get("id"),
+                    "db_id": obj.get("db_id"),
                     "name": obj["synonyms"][0].title() if obj.get("synonyms") else "—",
                 }
                 for obj in objects
@@ -325,11 +371,19 @@ class SlotSearchExecutor:
             # Запрос ссылается на промо-объект — ищем по db_id напрямую
             obj["identificator"] = {"db_id": promo_db_id}
         elif synonym:
-            # Синонимы в БД хранятся в нижнем регистре без ё (см. import_objects.py)
-            normalized = synonym.lower().strip().replace("ё", "е")
-            obj["name_synonyms"] = {"ru": [normalized]}
-            # При конкретном синониме properties и object_type не передаём —
-            # они фильтры для поиска класса объектов и добавляют лишние AND-условия
+            names = [n.strip().lower().replace("ё", "е")
+                     for n in re.split(r",|;|\s+и\s+", str(synonym)) if n.strip()]
+            obj["name_synonyms"] = {"ru": names[:5]}
+            # При синониме отбрасываем только класс-уровневые ключи — они фильтры
+            # для поиска класса объектов и режут выборку через AND. Локацию и
+            # атрибуты (Редкость, Детальное расположение) оставляем.
+            _CLASS_LEVEL = {"Тип ОФФ", "Подтип объекта", "подтип объекта"}
+            _merged = {**slots.get("properties", {}), **slots.get("extra", {})}
+            _merged = {k: v for k, v in _merged.items() if k not in _CLASS_LEVEL}
+            if _merged:
+                obj["properties"] = _merged
+            if slots.get("object_type"):
+                obj["object_type"] = slots["object_type"]
         else:
             merged_props = {**slots.get("properties", {}), **slots.get("extra", {})}
             if merged_props:
@@ -347,14 +401,20 @@ class SlotSearchExecutor:
 
         # При промо-переходе подставляем имя объекта в user_query —
         # векторный поиск в salut_bot использует именно его, а не clean_user_query
-        effective_query = (f"Расскажи про {promo_name}" if promo_name else user_query)
+
+        if promo_name:
+            effective_query = f"Расскажи про {promo_name}"
+        elif slots.get("from_list") and slots.get("synonym"):
+            effective_query = f"Расскажи про {slots['synonym']}"
+        else:
+            effective_query = user_query
 
         return {
             "system_parameters": {
                 "debug": True,
                 "user_query": effective_query,
                 "clean_user_query": effective_query,
-                "use_llm_answer": True,
+                "use_llm_answer": slots.get("modality") != "Изображение",
             },
             "search_parameters": search_params,
         }

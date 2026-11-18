@@ -177,6 +177,29 @@ _HABITAT_WORDS = {
 
 _GEO_MAP_RE = re.compile(r'на\s+карт[еу]|по\s+карт[еу]|\bкарт[еу]\b', re.IGNORECASE)
 
+# маркеры запроса картинки: покажи/покажите/показать, фото, картинка, снимок, "как выглядит"
+_IMAGE_MARKER_RE = re.compile(r'покаж|фото|фотк|картинк|снимок|как\s+выглядит', re.IGNORECASE)
+
+_CLASS_WORDS = _FLORA_WORDS | _FAUNA_WORDS
+
+# Ключи, которые обязаны жить в features, а не в properties
+_FEATURE_KEYS = {
+    "Время года", "Среда обитания", "Тип животного", "Тип растения",
+    "Цветение", "Наличие плодов", "Облачность",
+}
+
+
+def _is_class_like_synonym(synonym: str) -> bool:
+    """True, если synonym содержит слово-класс (растения/животные/птицы/...).
+
+    LLM иногда склеивает модификатор-фильтр со словом-классом:
+    "редкие растения", "хвойные деревья", "перелётные птицы". Такие
+    значения не являются именами объектов и должны быть обнулены.
+    """
+    if not synonym:
+        return False
+    words = set(re.findall(r'\w+', synonym.lower().replace("ё", "е")))
+    return bool(words & _CLASS_WORDS)
 
 def _detect_ambiguity(query: str, modality: str) -> bool:
     """
@@ -197,6 +220,114 @@ def _detect_ambiguity(query: str, modality: str) -> bool:
     return False
 
 
+
+# ── Правила для классовых запросов ───────────────────────────────────────────
+# "животные", "редкие растения", "эндемики", "музей" — это НЕ имена объектов.
+# В synonym они попадать не должны: поиск по имени идёт точным совпадением.
+_GEO_NOUNS = {
+    "музей", "музея", "музею", "музеем", "музее", "музеи", "музеев", "музеям", "музеями", "музеях",
+    "заповедник", "заповедника", "заповедники", "заповедников", "заказник", "заказника",
+    "заказники", "заказников", "нацпарк", "нацпарка", "нацпарки", "турбаза", "турбазы", "турбаз",
+    "гора", "горы", "гор", "горе", "гору", "горах", "озеро", "озера", "озёр", "озере", "озер",
+    "река", "реки", "реку", "реке", "рек", "остров", "острова", "островов", "поселок", "посёлок",
+    "поселка", "посёлка", "поселки", "посёлки", "город", "города", "городов", "село", "села",
+    "памятник", "памятника", "памятники", "памятников", "маяк", "маяка", "маяки",
+    "пещера", "пещеры", "пещер", "мыс", "мыса", "залив", "залива", "хребет", "хребта",
+}
+_CLASS_STEMS = {
+    "flora": ("растен", "цвет", "дерев", "кустарник", "трав", "гриб", "флор", "мох", "мх"),
+    "fauna": ("животн", "звер", "птиц", "рыб", "насеком", "фаун", "млекопит", "земноводн", "пресмыкающ"),
+}
+_MOD_STEMS = ("редк", "краснокниж", "эндем", "исчезающ", "охраняем", "хвойн", "лиственны",
+              "перелетн", "перелётн", "лекарствен", "ядовит")
+_PREPOSITIONS = {"на", "в", "во", "около", "рядом", "возле", "близ", "у", "из", "от", "до", "к", "ко"}
+_QUERY_STOP = set("""на в во покажи покажите показывай расскажи расскажите подскажи подскажите какие каких какая
+какой какое что кто где когда почему сколько чем это этот эта эти этом и а но с со по про о об
+от до из у к ко за для при около рядом возле близ есть ли мне нас вас тебя его ее её их он она они
+оно там тут здесь еще ещё можно нельзя нужен нужна нужны хочу хочет хотел посмотреть посмотри
+смотреть скинь кинь кинуть дай дайте пожалуйста здравствуйте привет добрый день вечер утро
+растет растёт растут водится водятся живет живёт живут обитает обитают находится находятся
+занесены занесен занесён занесена красную книгу виды вид список перечисли все вообще разных
+разного фотографии фотографию фотку фото картинку картинки изображение снимок снимки
+""".split())
+_NAME_ALIASES = {
+    "лиственница": "лиственница сибирская",
+    "еж": "даурский ёж",
+    "нерпа": "байкальская нерпа",
+    "омуль": "байкальский омуль",
+    "кедр": "сибирский кедр",
+    "хариус": "сибирский хариус",
+}
+
+_SUBTYPE_BY_NOUN = {
+    "музей": "Музеи", "музеи": "Музеи", "заповедник": "Заповедник", "заповедники": "Заповедник",
+    "заказник": "Заказник", "заказники": "Заказник", "нацпарк": "Нацпарк", "турбаза": "Турбаза",
+    "гора": "Гора", "горы": "Гора", "озеро": "Озеро", "река": "Река", "остров": "Остров",
+    "город": "Город", "поселок": "Посёлок", "посёлок": "Посёлок", "село": "Село",
+    "памятник": "Памятник", "маяк": "Маяк", "пещера": "Пещера", "мыс": "Мыс", "залив": "Залив",
+}
+
+
+def _normalize_class_query(query: str, slots: dict) -> dict:
+    """Классовый запрос → synonym=null + фильтры (Тип ОФФ / Подтип / Редкость).
+
+    Работает только когда в запросе нет собственных имён: все значимые слова —
+    класс или модификатор. "Баргузинский заповедник" и "даурский ёж" не трогаем.
+    """
+    words = re.findall(r"\w+", query.lower().replace("ё", "е"))
+    groups, mods, unknown = set(), set(), []
+    prev = None
+    for w in words:
+        if prev in _PREPOSITIONS and w not in _QUERY_STOP:
+            prev = w
+            continue            # слово после предлога — место, а не имя объекта
+        prev = w
+        if w in _QUERY_STOP or len(w) < 2:
+            continue
+        group = "geo" if w in _GEO_NOUNS else None
+        if not group:
+            group = next((g for g, stems in _CLASS_STEMS.items()
+                          if any(w.startswith(s) for s in stems)), None)
+        if group:
+            groups.add(group)
+            continue
+        if any(w.startswith(s) for s in _MOD_STEMS):
+            mods.add(w)
+            continue
+        unknown.append(w)
+
+    if unknown or not (groups or mods):
+        return slots
+
+    props = dict(slots.get("properties") or {})
+    slots["class_query"] = True   # null здесь осознанный: пользователь спросил класс
+    slots["synonym"] = None
+
+    if "geo" in groups:
+        slots["object_type"] = "Географический объект"
+        props.pop("Тип ОФФ", None)
+        for w in words:
+            if w in _SUBTYPE_BY_NOUN:
+                props["Подтип объекта"] = _SUBTYPE_BY_NOUN[w]
+                break
+    elif "flora" in groups and "fauna" not in groups:
+        slots["object_type"] = "Объект флоры и фауны"
+        props["Тип ОФФ"] = "Объект флоры"
+    elif "fauna" in groups and "flora" not in groups:
+        slots["object_type"] = "Объект флоры и фауны"
+        props["Тип ОФФ"] = "Объект фауны"
+    elif groups & {"flora", "fauna"}:
+        slots["object_type"] = "Объект флоры и фауны"
+
+    if any(w.startswith(("редк", "краснокниж")) for w in mods):
+        props["Редкость"] = "Редкое"
+    elif any(w.startswith("эндем") for w in mods):
+        props["Редкость"] = "Эндемик"
+
+    slots["properties"] = props
+    return slots
+
+
 def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[str, Set[str]]] = None) -> dict:
     """
     Детерминированные поправки к выводу LLM:
@@ -212,11 +343,16 @@ def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[s
     features = dict(slots.get("features") or {})
     synonym = (slots.get("synonym") or "").lower()
 
-    # ── 0. Если features заполнены, а modality не Изображение — исправляем ──
-    # features по правилам промпта существуют ТОЛЬКО при modality="Изображение",
-    # поэтому их наличие — однозначный сигнал даже если LLM пропустил поле
+    # ── 0. features без картинки ──────────────────────────────────────────
+    # Модальность переключаем ТОЛЬКО при явном маркере изображения.
+    # Иначе признаки отбрасываем: иначе "Где живёт нерпа" станет фото.
     if features and slots.get("modality") != "Изображение":
-        slots["modality"] = "Изображение"
+        if _IMAGE_MARKER_RE.search(q_lower) and not _GEO_MAP_RE.search(query):
+            slots["modality"] = "Изображение"
+        else:
+            logger.info("🔍 features dropped (no image marker)")
+            slots["features"] = {}
+            features = {}
 
     # ── 0.5. Явный маркер карты → Геоданные ──────────────────────────────────
     # "на карте", "на карту", "по карте", "карту/карте" — однозначный сигнал
@@ -225,12 +361,46 @@ def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[s
         slots["modality"] = "Геоданные"
         slots["features"] = {}
 
+    # ── 0.7. Явный маркер изображения → Изображение ─────────────────────────
+    # "покажи", "фото", "картинку" — однозначный сигнал, если нет карты и "где".
+    if (
+        slots.get("modality") != "Изображение"
+        and not _GEO_MAP_RE.search(query)
+        and _IMAGE_MARKER_RE.search(q_lower)
+        and not re.search(r'\bгде\b', q_lower)
+    ):
+        slots["modality"] = "Изображение"
+
     # ── 1. Определение Услуги по маркерам ────────────────────────────────────
     if slots.get("object_type") != "Услуга":
         for marker in _SERVICE_MARKERS:
             if marker in q_lower:
                 slots["object_type"] = "Услуга"
                 break
+            
+    # ── 1.5. Классовые запросы, перечисления, топонимы ──────────────────────
+    slots = _normalize_class_query(query, slots)
+    props = dict(slots.get("properties") or {})
+    features = dict(slots.get("features") or {})
+    synonym = (slots.get("synonym") or "").lower()
+    if _is_class_like_synonym(synonym):
+        logger.info(f"🔍 Class-like synonym nullified: {slots.get('synonym')!r}")
+        slots["synonym"] = None
+        slots["class_query"] = True
+        synonym = ""
+    elif slots.get("synonym"):
+        # Несколько объектов: оставляем ВСЕ имена, каждое дополняем до полного.
+        parts = [x.strip(" .;,") for x in re.split(r",|;|\s+и\s+", str(slots["synonym"]))]
+        fixed = []
+        for part in [x for x in parts if x]:
+            key = part.lower().replace("ё", "е")
+            full = _NAME_ALIASES.get(key, part)
+            if full != part:
+                logger.info(f"🔍 Synonym alias: {part!r} → {full!r}")
+            fixed.append(full)
+        if fixed:
+            slots["synonym"] = ", ".join(fixed)
+            synonym = slots["synonym"].lower()
 
     # ── 2. Fallback Тип ОФФ (только для ОФФ, только без синонима) ────────────
     if slots.get("object_type") == "Объект флоры и фауны" and not slots.get("synonym"):
@@ -243,6 +413,10 @@ def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[s
             elif has_fauna and not has_flora:
                 props["Тип ОФФ"] = "Объект фауны"
             # Оба → не устанавливаем (запрос о флоре И фауне одновременно)
+            
+    # Если пользователь просит "редкие" или "эндемики", ищем оба значения.
+    if "редк" in q_lower or "эндем" in q_lower:
+        props["Редкость"] = ["Редкое", "Эндемик"]
 
     # ── 3. Очистка Расположение относительно Байкала если "байкал" — часть синонима ──
     # Пример: "Байкальский музей" содержит "байкал", но это имя объекта, не озеро
@@ -267,6 +441,27 @@ def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[s
         props["Детальное расположение"] = props.pop("location")
     elif "location" in props:
         props.pop("location")
+
+    # ── 5.4. Недопустимые значения "Расположение относительно Байкала" ────
+    # "на Ольхоне", "в горах" и т.п. — не допустимые значения, из-за них
+    # фильтр по объектам даёт 0. Просто убираем, местоположение оставляем модели.
+    _BAIKAL_OK = {"в/на Байкале", "рядом/около Байкала", "неизвестно"}
+    baikal_val = props.get("Расположение относительно Байкала")
+    if baikal_val and baikal_val not in _BAIKAL_OK:
+        logger.info(f"🔍 Dropped invalid Baikal value: {baikal_val!r}")
+        props.pop("Расположение относительно Байкала", None)
+
+    # ── 5.5. Признаки, ошибочно попавшие в properties ─────────────────────
+    # "нерпа зимой": модель кладёт Время года в properties → фильтр по объектам
+    # даёт 0 и уходим в векторный fallback с летними фото. Переносим в features.
+    if slots.get("modality") == "Изображение":
+        for k in list(props):
+            if k in _FEATURE_KEYS:
+                features.setdefault(k, props.pop(k))
+    else:
+        for k in list(props):
+            if k in _FEATURE_KEYS:
+                props.pop(k)
 
     # ── 6. Фильтрация features по допустимому списку из resource_feature ──────
     # Если valid_features загружены из БД — оставляем только те признаки,
@@ -416,10 +611,13 @@ class SlotClassifier:
         logger.info(f"🔍 Classifying: '{query}'" + (f" | prev: '{prev_query}'" if prev_query else "") + (f" | promo: {[p.get('name') for p in (prev_promo or [])]}" if prev_promo else ""))
         try:
             result: SlotResult = await self.parser.ainvoke(prompt)
+            raw_slots = result.model_dump()
+
             slots = result.model_dump()
             slots = _post_process_slots(query, slots, self._valid_features)
             slots["template"] = _determine_template(slots)
             slots["modality_ambiguous"] = _detect_ambiguity(query, slots["modality"])
+            slots["_debug_llm_raw"] = raw_slots
             logger.info(f"🔍 Raw LLM slots: synonym={slots.get('synonym')!r} object_type={slots.get('object_type')!r} modality={slots.get('modality')!r} features={slots.get('features')}")
             return slots
         except Exception as e:

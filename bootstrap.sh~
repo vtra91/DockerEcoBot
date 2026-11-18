@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_DIR"
+
+echo "=== [Bootstrap] Настройка ALT Server 11.1.1 (p11) и окружения проекта ==="
+
+# 1. Удаление мусорных файлов нулевой длины из корня проекта
+rm -f "26.1.2" "=" "=0.15.1" "=0.20" "=0.8.0" "=1.0.0" "=13.0" "=2.4.0" "=5.2.1" \
+      "CACHED" "ERROR" "exporting" "Get-ChildItem" "naming" "resolve" "transferring" "unpacking" "[internal]" || true
+
+# 2. Загрузка обязательных модулей ядра для Docker
+for mod in overlay br_netfilter nf_tables; do
+    if ! lsmod | grep -q "^${mod}"; then
+        echo "[Bootstrap] Загрузка модуля ядра ${mod}..."
+        sudo modprobe "${mod}" || true
+    fi
+done
+
+if [ ! -f /etc/modules-load.d/docker.conf ]; then
+    printf "overlay\nbr_netfilter\nnf_tables\n" | sudo tee /etc/modules-load.d/docker.conf >/dev/null
+fi
+
+# 3. Настройка сетевых параметров sysctl для контейнеров
+if [ ! -f /etc/sysctl.d/99-docker.conf ]; then
+    cat << 'EOF' | sudo tee /etc/sysctl.d/99-docker.conf >/dev/null
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward = 1
+EOF
+    sudo sysctl --system >/dev/null 2>&1 || true
+fi
+
+# 4. Установка Docker и Docker Compose v2 на ALT Linux (p11)
+if ! command -v docker >/dev/null 2>&1; then
+    echo "[Bootstrap] Установка docker-engine и docker-compose-v2..."
+    if [ -f /etc/altlinux-release ]; then
+        sudo apt-get update
+        sudo apt-get install -y docker-engine docker-compose-v2 docker-buildx curl git jq python3
+    else
+        curl -fsSL https://get.docker.com | sudo sh
+    fi
+fi
+
+sudo systemctl enable --now docker
+sudo usermod -aG docker "${USER:-assistant}" 2>/dev/null || true
+
+# 5. Расширение Swap до 8 ГБ на Btrfs (если текущий Swap меньше 4 ГБ), чтобы ML-модели не падали по OOM
+TOTAL_SWAP_MB=$(free -m | awk '/^Swap:/ {print $2}')
+if [ "${TOTAL_SWAP_MB:-0}" -lt 4000 ] && [ ! -f /swapfile ]; then
+    echo "[Bootstrap] Создаём дополнительный /swapfile на 8 ГБ для ML-сервисов..."
+    if df -T / | grep -q btrfs; then
+        sudo btrfs filesystem mkswapfile --size 8g /swapfile || true
+    else
+        sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile || true
+    fi
+    if [ -f /swapfile ]; then
+        sudo swapon /swapfile || true
+        grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap defaults 0 0" | sudo tee -a /etc/fstab >/dev/null
+    fi
+fi
+
+# 6. Освобождение порта 80 (остановка системного nginx на хосте)
+if systemctl is-active --quiet nginx 2>/dev/null; then
+    echo "[Bootstrap] Остановка системного nginx на хосте для освобождения порта 80..."
+    sudo systemctl disable --now nginx || true
+fi
+
+# 7. Подготовка файлов окружения
+if [ ! -f shared.env ]; then
+    cp shared.env.example shared.env
+    echo "[Bootstrap] Создан файл shared.env"
+fi
+
+if [ ! -f .env ] && [ -f .env.example ]; then
+    cp .env.example .env
+    echo "[Bootstrap] Создан файл .env"
+fi
+
+# Гарантируем наличие BASE_PATH=/ecoassistant в shared.env
+if ! grep -q "^BASE_PATH=" shared.env; then
+    echo "BASE_PATH=/ecoassistant" >> shared.env
+fi
+if ! grep -q "^PUBLIC_BASE_URL=" shared.env; then
+    echo "PUBLIC_BASE_URL=https://cloud-b.istu.edu/ecoassistant" >> shared.env
+fi
+
+# Копируем конфиг nginx также в nginx.http.conf для совместимости
+cp -f nginx/nginx.conf nginx/nginx.http.conf 2>/dev/null || true
+
+echo "=== [Bootstrap] Готово! ==="
+

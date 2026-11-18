@@ -250,7 +250,7 @@
                                             data-bs-toggle="modal" data-bs-target="#textFeatureModal{{ t.id }}" title="Свойства">
                                         <i class="bi bi-tags"></i>
                                     </button>
-                                    <form action="/admin/biological/resource/delete/text/{{ t.id }}" method="post"
+                                    <form action="{{ ADMIN_PREFIX }}/biological/resource/delete/text/{{ t.id }}" method="post"
                                           onsubmit="return confirm('Удалить этот текстовый ресурс?')">
                                         <input type="hidden" name="entity_id" value="{{ entity.id }}">
                                         <button type="submit" class="btn btn-sm btn-outline-danger border-0">
@@ -320,7 +320,7 @@
                                             onclick="openEditImage(this)" title="Редактировать">
                                         <i class="bi bi-pencil" style="font-size:0.75rem;"></i>
                                     </button>
-                                    <form action="/admin/biological/resource/delete/image/{{ img_obj.data.id }}" method="post"
+                                    <form action="{{ ADMIN_PREFIX }}/biological/resource/delete/image/{{ img_obj.data.id }}" method="post"
                                           onsubmit="return confirm('Удалить?')">
                                         <input type="hidden" name="entity_id" value="{{ entity.id }}">
                                         <button type="submit" class="btn btn-sm btn-danger shadow-sm rounded-circle" style="width:32px;height:32px;padding:0;">
@@ -415,7 +415,7 @@
                                             title="Редактировать признаки">
                                         <i class="bi bi-pencil-square"></i>
                                     </button>
-                                    <form action="/admin/biological/resource/delete/geo/{{ loc.resource_id }}" method="post"
+                                    <form action="{{ ADMIN_PREFIX }}/biological/resource/delete/geo/{{ loc.resource_id }}" method="post"
                                           onsubmit="return confirm('Удалить этот ареал обитания?')" class="d-inline">
                                         <input type="hidden" name="entity_id" value="{{ entity.id }}">
                                         <button type="submit" class="btn btn-outline-danger btn-sm">
@@ -465,11 +465,11 @@
                                         <i class="bi bi-arrow-right text-success mx-1"></i>
                                         <span class="badge me-1" style="background:#dcfce7; color:#166534;">{{ lnk.relation_type }}</span>
                                         <i class="bi bi-arrow-right text-success mx-1"></i>
-                                        <a href="/admin/{{ lnk.object_section }}/{{ lnk.related_id }}" class="fw-bold text-success">
+                                        <a href="{{ ADMIN_PREFIX }}/{{ lnk.object_section }}/{{ lnk.related_id }}" class="fw-bold text-success">
                                             {{ lnk.name }}&nbsp;<i class="bi bi-box-arrow-up-right small"></i>
                                         </a>
                                         {% else %}
-                                        <a href="/admin/{{ lnk.object_section }}/{{ lnk.related_id }}" class="fw-bold text-success">
+                                        <a href="{{ ADMIN_PREFIX }}/{{ lnk.object_section }}/{{ lnk.related_id }}" class="fw-bold text-success">
                                             {{ lnk.name }}&nbsp;<i class="bi bi-box-arrow-up-right small"></i>
                                         </a>
                                         <i class="bi bi-arrow-right text-success mx-1"></i>
@@ -583,7 +583,7 @@
                 <h5 class="modal-title fw-bold">Новый текстовый ресурс</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form action="/admin/biological/{{ entity.id }}/add_text" method="post">
+            <form action="{{ ADMIN_PREFIX }}/biological/{{ entity.id }}/add_text" method="post">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label fw-bold small text-secondary">ЗАГОЛОВОК *</label>
@@ -645,7 +645,7 @@
                 <h5 class="modal-title fw-bold">Новое изображение</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form action="/admin/biological/{{ entity.id }}/add_image" method="post">
+            <form action="{{ ADMIN_PREFIX }}/biological/{{ entity.id }}/add_image" method="post">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label fw-bold small text-secondary">НАЗВАНИЕ *</label>
@@ -707,7 +707,7 @@
                 <h5 class="modal-title fw-bold">Новый ареал обитания</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form action="/admin/biological/{{ entity.id }}/add_geo" method="post" id="addGeoForm">
+            <form action="{{ ADMIN_PREFIX }}/biological/{{ entity.id }}/add_geo" method="post" id="addGeoForm">
                 <div class="modal-body p-0">
                     <div class="px-4 pt-3 pb-2">
                         <label class="form-label fw-bold small text-secondary">НАЗВАНИЕ *</label>
@@ -980,7 +980,7 @@
                     {% endif %}
                 </div>
                 {% else %}
-                <p class="text-muted small fst-italic">Каталог свойств для этого типа объекта пуст. Добавьте свойства в <a href="/admin/properties">каталоге</a>.</p>
+                <p class="text-muted small fst-italic">Каталог свойств для этого типа объекта пуст. Добавьте свойства в <a href="{{ ADMIN_PREFIX }}/properties">каталоге</a>.</p>
                 {% endfor %}
             </div>
             <div class="modal-footer">
@@ -1076,7 +1076,7 @@
                         <option value="">— выберите тип —</option>
                     </select>
                     <div class="form-text text-muted">
-                        Управление типами: <a href="/admin/link-types" target="_blank">Каталог типов связей</a>
+                        Управление типами: <a href="{{ ADMIN_PREFIX }}/link-types" target="_blank">Каталог типов связей</a>
                     </div>
                 </div>
                 <div id="modalLinkStatus"></div>
@@ -1102,7 +1102,7 @@ async function showMap(geodataId, locationName) {
     const mapModal = new bootstrap.Modal(document.getElementById('mapModal'));
     mapModal.show();
     try {
-        const response = await fetch('/admin/biological/get-map-html', {
+        const response = await fetch('{{ ADMIN_PREFIX }}/biological/get-map-html', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ geodata_id: geodataId })
@@ -1156,7 +1156,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function openEditText(btn) {
-    document.getElementById('editTextForm').action = `/admin/biological/resource/edit/text/${btn.dataset.resourceId}`;
+    document.getElementById('editTextForm').action = `{{ ADMIN_PREFIX }}/biological/resource/edit/text/${btn.dataset.resourceId}`;
     document.getElementById('editTextTitle').value = btn.dataset.title || '';
     const structuredRaw = btn.dataset.structured || '';
     const plainWrap = document.getElementById('editTextPlainWrap');
@@ -1268,7 +1268,7 @@ document.getElementById('editTextForm').addEventListener('submit', function() {
 });
 
 function openEditImage(btn) {
-    document.getElementById('editImageForm').action = `/admin/biological/resource/edit/image/${btn.dataset.resourceId}`;
+    document.getElementById('editImageForm').action = `{{ ADMIN_PREFIX }}/biological/resource/edit/image/${btn.dataset.resourceId}`;
     document.getElementById('editImageTitle').value = btn.dataset.title || '';
     const urlInput = document.getElementById('editImageUrl');
     urlInput.value = btn.dataset.url || '';
@@ -1298,7 +1298,7 @@ function openEditGeo(btn) {
     const geodataId = btn.dataset.geodataId;
     const title = btn.dataset.title || '';
 
-    document.getElementById('editGeoForm').action = `/admin/biological/resource/edit/geo/${resourceId}`;
+    document.getElementById('editGeoForm').action = `{{ ADMIN_PREFIX }}/biological/resource/edit/geo/${resourceId}`;
     document.getElementById('editGeoTitle').value = title;
     document.getElementById('editGeojsonHidden').value = '';
     document.getElementById('editGeoSaveBtn').disabled = true;
@@ -1359,7 +1359,7 @@ async function initEditGeoMap(geodataId) {
     }
 
     try {
-        const resp = await fetch(`/admin/biological/resource/geo/${geodataId}/geojson`);
+        const resp = await fetch(`{{ ADMIN_PREFIX }}/biological/resource/geo/${geodataId}/geojson`);
         const data = await resp.json();
         document.getElementById('editGeoMapLoader').style.display = 'none';
         document.getElementById('editDrawMap').style.display = '';
@@ -1577,7 +1577,7 @@ async function saveResourceFeatures(resourceId) {
     const features = {};
     fields.forEach(f => { if (f.value) features[f.dataset.featName] = f.value; });
     try {
-        const resp = await fetch(`/admin/resource/${resourceId}/update_features`, {
+        const resp = await fetch(`{{ ADMIN_PREFIX }}/resource/${resourceId}/update_features`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ features })
@@ -1612,7 +1612,7 @@ async function saveProperties(objectId) {
     {% endif %}
     {% endfor %}
     try {
-        const resp = await fetch(`/admin/biological/${objectId}/set_property`, {
+        const resp = await fetch(`{{ ADMIN_PREFIX }}/biological/${objectId}/set_property`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ properties: props })
@@ -1702,7 +1702,7 @@ document.getElementById('modalLinkSearch').addEventListener('input', function() 
 
 async function searchObjectsModal(q) {
     try {
-        const resp = await fetch(`/admin/object/search?q=${encodeURIComponent(q)}&exclude_id={{ entity.id }}`);
+        const resp = await fetch(`{{ ADMIN_PREFIX }}/object/search?q=${encodeURIComponent(q)}&exclude_id={{ entity.id }}`);
         const items = await resp.json();
         const container = document.getElementById('modalLinkResults');
         if (!items.length) {
@@ -1759,7 +1759,7 @@ async function confirmAddLink(objectId) {
     if (!relatedId) { status.innerHTML = '<span class="text-danger small">Выберите объект.</span>'; return; }
     if (!relationType) { status.innerHTML = '<span class="text-danger small">Выберите тип связи.</span>'; return; }
     try {
-        const resp = await fetch(`/admin/object/${objectId}/links/add`, {
+        const resp = await fetch(`{{ ADMIN_PREFIX }}/object/${objectId}/links/add`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ related_id: parseInt(relatedId), relation_type: relationType })
@@ -1773,7 +1773,7 @@ async function confirmAddLink(objectId) {
 async function deleteLink(objectId, relatedId, relationType, btn) {
     if (!confirm(`Удалить связь «${relationType}»?`)) return;
     try {
-        const resp = await fetch(`/admin/object/${objectId}/links/delete`, {
+        const resp = await fetch(`{{ ADMIN_PREFIX }}/object/${objectId}/links/delete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ related_id: relatedId, relation_type: relationType })
@@ -1787,7 +1787,7 @@ async function deleteLink(objectId, relatedId, relationType, btn) {
 // ===== Загрузка типов связей объект-объект =====
 document.addEventListener('DOMContentLoaded', async function() {
     try {
-        const types = await fetch('/admin/object/link-types').then(r => r.json());
+        const types = await fetch('{{ ADMIN_PREFIX }}/object/link-types').then(r => r.json());
         document.getElementById('modalLinkRelationType').innerHTML =
             '<option value="">— выберите тип —</option>' +
             types.map(t => `<option value="${t}">${t}</option>`).join('');
@@ -1862,7 +1862,7 @@ async function saveSynonyms() {
     saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Сохранение...';
 
     try {
-        const resp = await fetch(`/admin/biological/{{ entity.id }}/synonyms`, {
+        const resp = await fetch(`{{ ADMIN_PREFIX }}/biological/{{ entity.id }}/synonyms`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ synonyms: orderedSynonyms })
@@ -1917,5 +1917,5 @@ document.addEventListener('DOMContentLoaded', function() {
 
 </script>
 {% with lifeform = entity.bio_type %}{% include "macros/annotator_modal.html" %}{% endwith %}
-<script src="/admin/static/js/annotator.js"></script>
+<script src="{{ ADMIN_PREFIX }}/static/js/annotator.js"></script>
 {% endblock %}

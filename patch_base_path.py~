@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""
+Автоматический патчер проекта DockerEcoBot под BASE_PATH=/ecoassistant из shared.env.
+Учитывает реальный регистр директории AdminPanel и архитектуру FastAPI + Nginx.
+"""
+import os
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+ADMIN_MAIN_PATCH = """
+# === START ECOASSISTANT BASE_PATH PATCH ===
+BASE_PATH = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")
+
+def _eco_admin_url(url: str) -> str:
+    u = str(url)
+    if u.startswith(("http://", "https://")):
+        return u
+    if not u.startswith("/"):
+        u = "/" + u
+    bp = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")
+    # Убираем случайное задвоение
+    while bp and u.startswith(bp + bp + "/"):
+        u = u[len(bp):]
+    if bp and u.startswith(bp + "/admin"):
+        return u
+    if u.startswith("/admin"):
+        return f"{bp}{u}" if bp else u
+    return f"{bp}/admin{u}" if bp else f"/admin{u}"
+
+_OrigRedirectResponse = RedirectResponse
+class RedirectResponse(_OrigRedirectResponse):
+    def __init__(self, url, *args, **kwargs):
+        super().__init__(url=_eco_admin_url(url), *args, **kwargs)
+# === END ECOASSISTANT BASE_PATH PATCH ===
+"""
+
+JS_INTERCEPTOR = """
+<script id="ecoassistant-basepath-patch">
+(function() {
+    var bp = "{{ base_path | default('/ecoassistant') }}".replace(/\\/+$/, "");
+    if (!bp || bp.indexOf("{") !== -1) bp = "/ecoassistant";
+    window.BASE_PATH = bp;
+
+    function fixUrl(u) {
+        if (typeof u !== "string") return u;
+        while (u.indexOf(bp + bp + "/") === 0) {
+            u = u.slice(bp.length);
+        }
+        if (u.startsWith("/") && !u.startsWith("//") && !u.startsWith(bp + "/") && u !== bp) {
+            return bp + u;
+        }
+        return u;
+    }
+
+    var origFetch = window.fetch;
+    if (origFetch) {
+        window.fetch = function(input, init) {
+            if (typeof input === "string") {
+                input = fixUrl(input);
+            } else if (input && typeof input.url === "string") {
+                input = new Request(fixUrl(input.url), input);
+            }
+            return origFetch.call(this, input, init);
+        };
+    }
+
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        arguments[1] = fixUrl(url);
+        return origOpen.apply(this, arguments);
+    };
+})();
+</script>
+"""
+
+
+def patch_admin_panel():
+    admin_dir = ROOT / "AdminPanel"
+    if not admin_dir.exists():
+        print(f"[ERROR] Директория {admin_dir} не найдена!")
+        return
+
+    # 1. Патчим AdminPanel/main.py
+    main_py = admin_dir / "main.py"
+    if main_py.exists():
+        content = main_py.read_text(encoding="utf-8", errors="ignore")
+        original = content
+
+        if "START ECOASSISTANT BASE_PATH PATCH" not in content:
+            target = "load_dotenv()"
+            if target in content:
+                content = content.replace(target, target + "\n" + ADMIN_MAIN_PATCH, 1)
+            else:
+                content = ADMIN_MAIN_PATCH + "\n" + content
+
+        # Добавляем глобальную переменную base_path в Jinja2 templates.env.globals
+        if 'templates.env.globals["base_path"]' not in content and "templates = Jinja2Templates" in content:
+            content = content.replace(
+                'templates = Jinja2Templates(directory="templates")',
+                'templates = Jinja2Templates(directory="templates")\n'
+                'templates.env.globals["base_path"] = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")',
+                1,
+            )
+
+        # Дополнительно монтируем /static наряду с /admin/static, чтобы оба пути работали
+        if 'app.mount("/static"' not in content and 'app.mount("/admin/static"' in content:
+            content = content.replace(
+                'app.mount("/admin/static", StaticFiles(directory="static"), name="static")',
+                'app.mount("/admin/static", StaticFiles(directory="static"), name="static")\n'
+                'app.mount("/static", StaticFiles(directory="static"), name="static_root")',
+                1,
+            )
+
+        if content != original:
+            main_py.write_text(content, encoding="utf-8")
+            print("[PATCHED] AdminPanel/main.py")
+
+    # 2. Патчим все HTML-шаблоны в AdminPanel/templates/
+    templates_dir = admin_dir / "templates"
+    if templates_dir.exists():
+        for html_file in templates_dir.rglob("*.html"):
+            if html_file.name.endswith((".bak2", ".bak3", ".bak4", ".bak5")):
+                continue
+            content = html_file.read_text(encoding="utf-8", errors="ignore")
+            original = content
+
+            # Вставляем JS-перехватчик в <head> в base.html и login.html
+            if html_file.name in ("base.html", "login.html") and 'id="ecoassistant-basepath-patch"' not in content:
+                if "</head>" in content:
+                    content = content.replace("</head>", JS_INTERCEPTOR + "\n</head>", 1)
+
+            # Заменяем прямые ссылки "/admin..." на "{{ base_path }}/admin..."
+            content = re.sub(r'(href|src|action)=(["\'])/admin\b', r'\1=\2{{ base_path }}/admin', content)
+            # Защита от двойной подстановки при повторном запуске
+            content = content.replace("{{ base_path }}{{ base_path }}", "{{ base_path }}")
+            content = content.replace("/ecoassistant/ecoassistant/", "/ecoassistant/")
+
+            if content != original:
+                html_file.write_text(content, encoding="utf-8")
+                print(f"[PATCHED] {html_file.relative_to(ROOT)}")
+
+    # 3. Патчим JS-файлы в AdminPanel/static/js/
+    js_dir = admin_dir / "static" / "js"
+    if js_dir.exists():
+        for js_file in js_dir.rglob("*.js"):
+            content = js_file.read_text(encoding="utf-8", errors="ignore")
+            original = content
+            content = content.replace("/ecoassistant/ecoassistant/", "/ecoassistant/")
+            if content != original:
+                js_file.write_text(content, encoding="utf-8")
+                print(f"[PATCHED] {js_file.relative_to(ROOT)}")
+
+
+def patch_fastapi_service(rel_path: str, default_prefix: str):
+    p = ROOT / rel_path
+    if not p.exists():
+        return
+    content = p.read_text(encoding="utf-8", errors="ignore")
+    if "root_path=" in content:
+        return
+    if "import os" not in content:
+        content = "import os\n" + content
+    content = re.sub(
+        r"FastAPI\s*\(",
+        f'FastAPI(root_path=os.getenv("ROOT_PATH", os.getenv("BASE_PATH", "{default_prefix}")), ',
+        content,
+        count=1,
+    )
+    p.write_text(content, encoding="utf-8")
+    print(f"[PATCHED FastAPI] {rel_path}")
+
+
+def main():
+    patch_admin_panel()
+    patch_fastapi_service("salut_bot/fastapi_app/main.py", "/ecoassistant")
+    patch_fastapi_service("EcoBotProject/DialogService/api.py", "/ecoassistant/core-api")
+    patch_fastapi_service("dsapi/main.py", "/ecoassistant/dsapi")
+    patch_fastapi_service("stt_service/app/main.py", "/ecoassistant/stt")
+    patch_fastapi_service("images-extractor/API.py", "/ecoassistant/images-extractor")
+    print("=== Патчинг BASE_PATH завершён успешно ===")
+
+
+if __name__ == "__main__":
+    main()

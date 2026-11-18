@@ -1,0 +1,44 @@
+# =============================================================================
+# Единый конфигурационный файл окружения EcoAssistant (shared.env)
+# =============================================================================
+
+# Базовый путь для работы за внешним реверс-прокси (без слэша на конце)
+# Для https://cloud-b.istu.edu/ecoassistant/ значение должно быть /ecoassistant
+BASE_PATH=/ecoassistant
+ROOT_PATH=/ecoassistant
+PUBLIC_DOMAIN=https://cloud-b.istu.edu
+PUBLIC_BASE_URL=https://cloud-b.istu.edu/ecoassistant
+
+# PostgreSQL
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+POSTGRES_DB=ecobot_db
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+DATABASE_URL=postgresql://postgres:postgres@db:5432/ecobot_db
+
+# Redis
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_URL=redis://redis:6379/0
+
+# Внутренние адреса микросервисов (внутри Docker-сети общаются напрямую без префикса)
+SALUT_BOT_URL=http://salut_bot:5000
+SEARCH_API_URL=http://salut_bot:5000
+DSAPI_URL=http://dsapi:8000
+STT_SERVICE_URL=http://stt_service:8001
+IMAGES_EXTRACTOR_URL=http://images-extractor:8002
+DIALOG_SERVICE_URL=http://dialog_service:8003
+ADMINPANEL_URL=http://adminpanel:5000
+
+# Настройки моделей и кеша HuggingFace
+HF_HOME=/root/.cache/huggingface
+TRANSFORMERS_CACHE=/root/.cache/huggingface
+TORCH_HOME=/root/.cache/torch
+DEVICE=cpu
+
+# Настройки почты и админ-панели
+FLASK_ENV=production
+SECRET_KEY=ecoassistant-secret-key-change-me
+LOGIN_URL=/ecoassistant/admin/login

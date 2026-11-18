@@ -1,0 +1,36 @@
+# =============================================================
+# Сервер EcoAssistant за шлюзом https://cloud-b.istu.edu/ecoassistant/
+#
+# Схема:  браузер ──https──▶ cloud-b (срезает /ecoassistant/) ──http──▶ 172.25.4.35:80
+#         хостовый nginx (:80, /etc/nginx/sites-enabled.d/ecoassistant.conf)
+#         ──▶ 127.0.0.1:8088 — nginx из этого compose (nginx/nginx.http.conf) ──▶ сервисы
+#
+# Подключение — одна строка в .env в корне репозитория (файл в .gitignore):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.cloudb.yml
+# после этого обычные `docker compose up -d`, `docker compose logs` и т.д.
+#
+# Префикс задаётся в shared.env: BASE_PATH=/ecoassistant,
+# PUBLIC_BASE_URL=https://cloud-b.istu.edu/ecoassistant
+# =============================================================
+services:
+  nginx:
+    # Порт 80 на хосте занят системным nginx — наш слушает только localhost
+    ports: !override
+      - "127.0.0.1:8088:80"
+    # TLS снимает cloud-b: берём HTTP-конфиг, сертификаты не нужны
+    volumes: !override
+      - ./nginx/nginx.http.conf:/etc/nginx/nginx.conf:ro
+      - /dev/null:/etc/nginx/conf.d/default.conf
+      - ./maps:/var/www/maps
+      - ./salut_bot/images:/var/www/images
+
+  # Фаервол на сервере выключен: всё, что опубликовано на 0.0.0.0, видно из сети
+  # университета. Сервисам наружу торчать незачем — ходят друг к другу по ecobot_net,
+  # снаружи только через nginx.
+  db:
+    ports: !reset []
+  max:
+    # webhook приходит через nginx: /ecoassistant/max-webhook → max:8080
+    ports: !reset []
+  stt-service:
+    ports: !reset []

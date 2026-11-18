@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_DIR"
+
+# Конвертация возможных CRLF окончаний строк в LF
+find . -maxdepth 3 -type f \( -name "*.sh" -o -name "*.py" -o -name "*.env*" \) -exec sed -i 's/\r$//' {} + 2>/dev/null || true
+
+echo "=== [1/6] Запуск bootstrap.sh ==="
+bash ./bootstrap.sh
+
+echo "=== [2/6] Патчинг всех микросервисов под BASE_PATH из shared.env ==="
+if [ -f ./patch_base_path.py ]; then
+    python3 ./patch_base_path.py
+fi
+
+# Определяем команду вызова docker
+DOCKER_CMD="docker"
+if ! docker info >/dev/null 2>&1; then
+    DOCKER_CMD="sudo docker"
+fi
+
+# Загружаем переменные из shared.env
+set -a
+[ -f shared.env ] && source shared.env
+[ -f .env ] && source .env
+set +a
+
+echo "=== [3/6] Создание рабочих директорий и настройка прав ==="
+mkdir -p logs maps dsapi/results
+chmod -R 777 logs maps dsapi/results 2>/dev/null || sudo chmod -R 777 logs maps dsapi/results
+
+echo "=== [4/6] Сборка Docker-образов ==="
+$DOCKER_CMD compose -f docker-compose.yml build
+
+echo "=== [5/6] Запуск БД PostgreSQL и Redis, импорт данных ==="
+$DOCKER_CMD compose -f docker-compose.yml up -d db redis
+
+echo "Ожидание готовности PostgreSQL..."
+until $DOCKER_CMD compose -f docker-compose.yml exec -T db pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-ecobot_db}" >/dev/null 2>&1; do
+    sleep 2
+done
+
+if [ -f scripts/init_db.sh ]; then
+    bash scripts/init_db.sh || true
+fi
+
+echo "Предзагрузка ML-моделей в общий кеш..."
+$DOCKER_CMD compose -f docker-compose.yml run --rm dsapi python setup_models.py || true
+
+echo "=== [6/6] Запуск всех сервисов EcoAssistant ==="
+$DOCKER_CMD compose -f docker-compose.yml up -d
+
+echo "=================================================================="
+echo "Развёртывание успешно завершено!"
+echo "Внутренний URL: http://172.25.4.35/ecoassistant/"
+echo "Внешний URL:    ${PUBLIC_BASE_URL:-https://cloud-b.istu.edu/ecoassistant}/"
+echo "=================================================================="

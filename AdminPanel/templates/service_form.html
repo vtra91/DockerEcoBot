@@ -7,7 +7,7 @@
     <div class="card-body p-5">
         <h4 class="fw-bold mb-4" style="color:#d97706;">Создание услуги</h4>
 
-        <form action="/admin/service/save" method="post">
+        <form action="{{ ADMIN_PREFIX }}/service/save" method="post">
             <div class="row mb-4">
                 <div class="col-md-12">
                     <label class="form-label fw-bold text-secondary small">НАЗВАНИЕ *</label>
@@ -133,7 +133,7 @@
             </div>
 
             <div class="d-flex justify-content-between align-items-center mt-5 pt-3 border-top">
-                <a href="/admin/service" class="btn btn-light text-secondary fw-bold px-4 py-2">Отмена</a>
+                <a href="{{ ADMIN_PREFIX }}/service" class="btn btn-light text-secondary fw-bold px-4 py-2">Отмена</a>
                 <button type="submit" class="btn px-5 py-2 fw-bold" style="background:#d97706; color:#fff; border-radius:10px;">
                     💾 Сохранить и продолжить
                 </button>

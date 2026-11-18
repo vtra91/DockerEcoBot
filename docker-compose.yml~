@@ -1,0 +1,206 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: ecoassistant_db
+    restart: unless-stopped
+    env_file:
+      - shared.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-ecobot_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./salut_bot/knowledge_base_scripts/Relational/db_importer/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-ecobot_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    networks:
+      - eco_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: ecoassistant_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - eco_net
+
+  salut_bot:
+    build:
+      context: ./salut_bot
+      dockerfile: Dockerfile
+    container_name: ecoassistant_salut_bot
+    restart: unless-stopped
+    env_file:
+      - shared.env
+    environment:
+      BASE_PATH: ${BASE_PATH:-/ecoassistant}
+      ROOT_PATH: ${BASE_PATH:-/ecoassistant}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://cloud-b.istu.edu/ecoassistant}
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+      DEVICE: cpu
+    volumes:
+      - ./maps:/app/maps
+      - ./logs:/app/logs
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - eco_net
+
+  dsapi:
+    build:
+      context: ./dsapi
+      dockerfile: Dockerfile
+    container_name: ecoassistant_dsapi
+    restart: unless-stopped
+    env_file:
+      - shared.env
+    environment:
+      BASE_PATH: ${BASE_PATH:-/ecoassistant}/dsapi
+      ROOT_PATH: ${BASE_PATH:-/ecoassistant}/dsapi
+      DEVICE: cpu
+    volumes:
+      - ./dsapi/results:/app/results
+      - ./maps:/app/maps
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - eco_net
+
+  stt_service:
+    build:
+      context: ./stt_service
+      dockerfile: Dockerfile
+    container_name: ecoassistant_stt
+    restart: unless-stopped
+    env_file:
+      - shared.env
+    environment:
+      BASE_PATH: ${BASE_PATH:-/ecoassistant}/stt
+      ROOT_PATH: ${BASE_PATH:-/ecoassistant}/stt
+      DEVICE: cpu
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    networks:
+      - eco_net
+
+  images-extractor:
+    build:
+      context: ./images-extractor
+      dockerfile: Dockerfile
+    container_name: ecoassistant_images_extractor
+    restart: unless-stopped
+    env_file:
+      - shared.env
+    environment:
+      BASE_PATH: ${BASE_PATH:-/ecoassistant}/images-extractor
+      ROOT_PATH: ${BASE_PATH:-/ecoassistant}/images-extractor
+      DEVICE: cpu
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - torch_cache:/root/.cache/torch
+    networks:
+      - eco_net
+
+  dialog_service:
+    build:
+      context: ./EcoBotProject/DialogService
+      dockerfile: Dockerfile
+    container_name: ecoassistant_dialog
+    restart: unless-stopped
+    env_file:
+      - shared.env
+    environment:
+      BASE_PATH: ${BASE_PATH:-/ecoassistant}/dialog
+      ROOT_PATH: ${BASE_PATH:-/ecoassistant}/dialog
+      REDIS_HOST: redis
+      SEARCH_API_URL: http://salut_bot:5000
+      STT_SERVICE_URL: http://stt_service:8001
+      IMAGES_EXTRACTOR_URL: http://images-extractor:8002
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      salut_bot:
+        condition: service_started
+    networks:
+      - eco_net
+
+  adminpanel:
+    build:
+      context: ./Adminpanel
+      dockerfile: Dockerfile
+    container_name: ecoassistant_adminpanel
+    restart: unless-stopped
+    env_file:
+      - shared.env
+    environment:
+      BASE_PATH: ${BASE_PATH:-/ecoassistant}
+      ROOT_PATH: ${BASE_PATH:-/ecoassistant}
+      APPLICATION_ROOT: ${BASE_PATH:-/ecoassistant}
+      SCRIPT_NAME: ${BASE_PATH:-/ecoassistant}
+      LOGIN_URL: ${BASE_PATH:-/ecoassistant}/admin/login
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://cloud-b.istu.edu/ecoassistant}
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+      SALUT_BOT_URL: http://salut_bot:5000
+      DSAPI_URL: http://dsapi:8000
+      DIALOG_SERVICE_URL: http://dialog_service:8003
+    volumes:
+      - ./maps:/app/maps
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      salut_bot:
+        condition: service_started
+    networks:
+      - eco_net
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: ecoassistant_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./maps:/usr/share/nginx/html/maps:ro
+    depends_on:
+      - adminpanel
+      - salut_bot
+      - dsapi
+      - stt_service
+      - dialog_service
+    networks:
+      - eco_net
+
+networks:
+  eco_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  hf_cache:
+  torch_cache:

@@ -1,3 +1,4 @@
+import os
 import uvicorn
 import sys
 from fastapi import FastAPI
@@ -27,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 setup_logging()
 
-app = FastAPI(
+app = FastAPI(root_path=os.getenv("ROOT_PATH", os.getenv("BASE_PATH", "/ecoassistant/dsapi")), 
     title=settings.PROJECT_NAME,
     description="Модуль статического и динамического тестирования диалоговых систем",
     version="1.0.0",

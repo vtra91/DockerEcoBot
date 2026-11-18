@@ -1,0 +1,36 @@
+import os
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from .routes import all_routers
+
+# BASE_PATH (shared.env) — публичный префикс, например /ecoassistant.
+# Префикс снимается на внешнем шлюзе, поэтому маршруты остаются прежними;
+# root_path нужен, чтобы /docs и openapi.json ссылались на правильный адрес.
+_BASE_PATH = os.getenv("BASE_PATH", "").strip().strip("/")
+
+app = FastAPI(
+    title="SalutBot FastAPI",
+    description="Переписанный сервис на FastAPI",
+    version="0.1.0",
+    root_path=f"/{_BASE_PATH}" if _BASE_PATH else "",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+for router in all_routers:
+    app.include_router(router)
+
+@app.get("/")
+async def home():
+    return {"message": "SalutBot FastAPI works!"}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}

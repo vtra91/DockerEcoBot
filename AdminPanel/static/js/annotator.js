@@ -2,6 +2,8 @@
  * перенос итогов в стандартную форму «Признаки» (openEditFeatures из biological_edit.html).
  * Зависит от глобальных FEATURE_CATALOG и openEditFeatures на странице объекта. */
 (function () {
+    // Базовый путь админки задаётся в base.html из BASE_PATH (shared.env)
+    const ADMIN = window.ADMIN_PREFIX || '/admin';
     const POLL_MS = 2000;
     const MAX_POLL_ERRORS = 3;
     const EXEC_SHORT = { clip: 'CLIP', grounding_dino: 'DINO', owlv2: 'OWLv2', phenovision: 'PhenoVision', gigachat: 'GigaChat' };
@@ -41,7 +43,7 @@
     // ---------- шаг 1: форма ----------
     async function loadConfig() {
         const lifeform = modalEl().dataset.lifeform || '';
-        const url = '/admin/annotator/config' + (lifeform ? '?lifeform=' + encodeURIComponent(lifeform) : '');
+        const url = `${ADMIN}/annotator/config` + (lifeform ? '?lifeform=' + encodeURIComponent(lifeform) : '');
         const resp = await fetch(url);
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || 'не удалось получить настройки аннотатора');
@@ -102,7 +104,7 @@
         showError('');
         $('annRunBtn').disabled = true;
         try {
-            const resp = await fetch(`/admin/annotator/start/${st.resourceId}`, {
+            const resp = await fetch(`${ADMIN}/annotator/start/${st.resourceId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -136,7 +138,7 @@
     function poll(taskId) {
         st.timer = setTimeout(async () => {
             try {
-                const data = await (await fetch(`/admin/annotator/tasks/${taskId}`)).json();
+                const data = await (await fetch(`${ADMIN}/annotator/tasks/${taskId}`)).json();
                 if (!data.ok) throw new Error(data.error);
                 st.pollErrors = 0;
                 const task = data.task;

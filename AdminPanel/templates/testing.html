@@ -72,7 +72,7 @@
 
 <div class="modal fade" id="startTestModal" tabindex="-1">
     <div class="modal-dialog modal-lg modal-dialog-centered">
-        <form class="modal-content" action="/admin/testing/start" method="post" style="border-radius: 24px; border: none; shadow: 0 20px 50px rgba(0,0,0,0.2);">
+        <form class="modal-content" action="{{ ADMIN_PREFIX }}/testing/start" method="post" style="border-radius: 24px; border: none; shadow: 0 20px 50px rgba(0,0,0,0.2);">
             <div class="modal-header border-0 px-4 pt-4">
                 <h4 class="fw-bold text-primary m-0">🚀 Конфигурация тестирования</h4>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -218,7 +218,7 @@ async function updateStatuses() {
 
         try {
             console.log(`JS: Отправляю запрос /admin/testing/check/${sid}`);
-            const res = await fetch(`/admin/testing/check/${sid}`);
+            const res = await fetch(`{{ ADMIN_PREFIX }}/testing/check/${sid}`);
             const data = await res.json();
             
             // Обновляем бар
@@ -352,7 +352,7 @@ async function viewResults(sid) {
     modal.show();
 
     try {
-        const response = await fetch(`/admin/testing/results/${sid}`);
+        const response = await fetch(`{{ ADMIN_PREFIX }}/testing/results/${sid}`);
         if (!response.ok) throw new Error("Данные еще не готовы или отсутствуют");
         currentTestResultsData = await response.json();
         renderResultsView('all');

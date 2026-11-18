@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_DIR"
+
+DOCKER_CMD="docker"
+if ! docker info >/dev/null 2>&1; then
+    DOCKER_CMD="sudo docker"
+fi
+
+set -a
+[ -f shared.env ] && source shared.env
+set +a
+
+echo "[init_db] Проверка и применение схемы БД..."
+$DOCKER_CMD compose -f docker-compose.yml exec -T db psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-ecobot_db}" -f /docker-entrypoint-initdb.d/01-schema.sql >/dev/null 2>&1 || true
+
+echo "[init_db] Запуск импорта объектов и ресурсов базы знаний в salut_bot..."
+$DOCKER_CMD compose -f docker-compose.yml run --rm salut_bot python -m knowledge_base_scripts.Relational.db_importer.main || echo "[init_db] Импорт БД уже выполнен или пропущен."
+
+echo "[init_db] Готово."

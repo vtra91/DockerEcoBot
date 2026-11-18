@@ -27,11 +27,11 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-eco}",
+          "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-eco}",
         ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 10s
 
   backend:
@@ -49,13 +49,14 @@ services:
       - ./maps:/app/maps
       - ./salut_bot/images:/app/images
       - ./salut_bot/embedding_models:/app/embedding_models
-      - ./salut_bot/knowledge_base_scripts/Vector/faiss_index:/app/knowledge_base_scripts/Vector/faiss_index:ro
+      - ./salut_bot/knowledge_base_scripts/Vector/faiss_index:/app/knowledge_base_scripts/Vector/faiss_index
       - ./logs:/app/logs
       - ./salut_bot/search_api/services/geo_map_service.py:/app/search_api/services/geo_map_service.py:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DB_HOST=db
       - REDIS_HOST=redis
+      - BASE_PATH=${BASE_PATH:-/ecoassistant}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [ecobot_net]
@@ -72,6 +73,7 @@ services:
       - REDIS_HOST=redis
       - DB_HOST=db
       - ECOBOT_API_BASE_URL=http://backend:8000
+      - BASE_PATH=${BASE_PATH:-/ecoassistant}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -104,6 +106,7 @@ services:
       - MAX_USE_WEBHOOK=true
       - MAX_WEBHOOK_PORT=8080
       - MAX_WEBHOOK_PATH=/max-webhook
+      - BASE_PATH=${BASE_PATH:-/ecoassistant}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -129,6 +132,7 @@ services:
       - DB_HOST=db
       - REDIS_HOST=redis
       - ANNOTATOR_URL=http://annotator:8010
+      - BASE_PATH=${BASE_PATH:-/ecoassistant}
     depends_on:
       db:
         condition: service_healthy
@@ -138,7 +142,6 @@ services:
         condition: service_started
     networks: [ecobot_net]
 
-  # Не стартует с остальными сервисами: только docker compose --profile annotator up -d annotator
   annotator:
     build: ./annotator
     profiles: [annotator]
@@ -151,21 +154,18 @@ services:
     expose:
       - "8010"
     networks: [ecobot_net]
-    # GPU: запускать с -f docker-compose.gpu.yml
 
   nginx:
     image: nginx:alpine
     restart: always
     ports:
       - "80:80"
-      - "443:443"
     volumes:
-      - ./nginx/nginx.https.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - /dev/null:/etc/nginx/conf.d/default.conf
       - ./maps:/var/www/maps
       - ./salut_bot/images:/var/www/images
       - ./certbot/www:/var/www/certbot
-      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - backend
       - admin
@@ -180,7 +180,7 @@ services:
     expose:
       - "5050"
     volumes:
-      - ./dsapi/local_models:/app/local_models:ro
+      - ./dsapi/local_models:/app/local_models
       - ./dsapi/doc:/app/doc:ro
       - ./dsapi/prompts_structure:/app/prompts_structure:ro
       - ./dsapi/logs:/app/logs

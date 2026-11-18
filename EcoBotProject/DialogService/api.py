@@ -33,7 +33,12 @@ async def lifespan(app: FastAPI):
     logger.info("Core API: сессия закрыта.")
 
 
-app = FastAPI(title="EcoBot Core API", lifespan=lifespan)
+# BASE_PATH (shared.env) + /core-api — публичный адрес этого сервиса за nginx.
+# Нужен только для /docs и openapi.json, маршруты не меняются.
+_BASE_PATH = os.getenv("BASE_PATH", "").strip().strip("/")
+_ROOT_PATH = (f"/{_BASE_PATH}" if _BASE_PATH else "") + "/core-api"
+
+app = FastAPI(title="EcoBot Core API", lifespan=lifespan, root_path=_ROOT_PATH)
 app.include_router(search_router)
 app.include_router(config_router)
 

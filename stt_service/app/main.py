@@ -1,3 +1,4 @@
+import os
 from __future__ import annotations
 
 import logging
@@ -66,7 +67,7 @@ def create_app(
             await engine.shutdown()
             logger.info("STT-сервис остановлен")
 
-    application = FastAPI(
+    application = FastAPI(root_path=os.getenv("ROOT_PATH", os.getenv("BASE_PATH", "/ecoassistant/stt")), 
         title=resolved.app_name,
         version=__version__,
         lifespan=lifespan,

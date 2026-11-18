@@ -61,7 +61,7 @@
           {% endfor %}
           <div class="save-bar">
             <button type="button" class="btn btn-primary px-4 fw-bold"
-                    onclick="saveShared('form-prompts', '/admin/settings/prompts', 'instant')">
+                    onclick="saveShared('form-prompts', '{{ ADMIN_PREFIX }}/settings/prompts', 'instant')">
               Сохранить промпты
             </button>
           </div>
@@ -116,7 +116,7 @@
           </div>
           <div class="save-bar">
             <button type="button" class="btn btn-primary px-4 fw-bold"
-                    onclick="saveShared('form-{{ tab.id }}-instant', '/admin/settings/shared', 'instant')">
+                    onclick="saveShared('form-{{ tab.id }}-instant', '{{ ADMIN_PREFIX }}/settings/shared', 'instant')">
               Сохранить
             </button>
             <span class="save-hint">Изменения применятся без перезапуска контейнеров</span>
@@ -162,7 +162,7 @@
           </div>
           <div class="save-bar">
             <button type="button" class="btn btn-warning px-4 fw-bold"
-                    onclick="saveShared('form-{{ tab.id }}-restart', '/admin/settings/shared', 'restart', '{{ tab.restart_cmd }}')">
+                    onclick="saveShared('form-{{ tab.id }}-restart', '{{ ADMIN_PREFIX }}/settings/shared', 'restart', '{{ tab.restart_cmd }}')">
               Сохранить
             </button>
             <span class="save-hint">После сохранения выполните команду выше для применения</span>
@@ -196,7 +196,7 @@ document.addEventListener("DOMContentLoaded", function () {
   if (promoToggle) {
     promoToggle.addEventListener('change', async (e) => {
       try {
-        await fetch('/admin/chat/promo-setting', {
+        await fetch('{{ ADMIN_PREFIX }}/chat/promo-setting', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: e.target.checked }),

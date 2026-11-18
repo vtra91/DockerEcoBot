@@ -7,7 +7,7 @@
     <p class="text-secondary mb-0" style="font-size:1.05rem; font-weight:500;">
         🐾 Управление объектами фауны базы знаний
     </p>
-    <a href="/admin/biological/new" class="btn-stats"
+    <a href="{{ ADMIN_PREFIX }}/biological/new" class="btn-stats"
        style="background:#2563eb; box-shadow:0 4px 6px rgba(37,99,235,0.2);">
         <i class="bi bi-plus-lg me-1"></i> Добавить
     </a>
@@ -68,7 +68,7 @@
             <div class="col-md-3 d-flex gap-2">
                 <button class="btn btn-primary fw-bold flex-grow-1" style="border-radius:10px;" onclick="applyFilters()">Найти</button>
                 {% if search %}
-                <a href="/admin/fauna{% if filter_resources %}?filter_resources={{ filter_resources }}{% endif %}{% if sort_by and sort_by != 'default' %}{% if filter_resources %}&{% else %}?{% endif %}sort_by={{ sort_by }}{% endif %}"
+                <a href="{{ ADMIN_PREFIX }}/fauna{% if filter_resources %}?filter_resources={{ filter_resources }}{% endif %}{% if sort_by and sort_by != 'default' %}{% if filter_resources %}&{% else %}?{% endif %}sort_by={{ sort_by }}{% endif %}"
                    class="btn btn-outline-danger fw-bold" style="border-radius:10px;" title="Сбросить поиск">
                     <i class="bi bi-x-lg"></i>
                 </a>
@@ -116,7 +116,7 @@
                     </span>
                 </td>
                 <td class="td-act">
-                    <a href="/admin/biological/{{ e.id }}" class="btn-details">Открыть</a>
+                    <a href="{{ ADMIN_PREFIX }}/biological/{{ e.id }}" class="btn-details">Открыть</a>
                 </td>
             </tr>
             {% else %}
@@ -159,12 +159,12 @@ function buildParams() {
     return params;
 }
 function applyFilters() {
-    window.location.href = '/admin/fauna?' + buildParams().toString();
+    window.location.href = '{{ ADMIN_PREFIX }}/fauna?' + buildParams().toString();
 }
 function goToPage(p) {
     const params = buildParams();
     params.set('page', p);
-    window.location.href = '/admin/fauna?' + params.toString();
+    window.location.href = '{{ ADMIN_PREFIX }}/fauna?' + params.toString();
 }
 document.getElementById('searchInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') applyFilters();

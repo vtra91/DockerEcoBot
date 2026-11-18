@@ -8,7 +8,7 @@
         Управление услугами базы знаний
     </p>
     <div class="d-flex gap-2">
-        <a href="/admin/service/new" class="btn-stats"
+        <a href="{{ ADMIN_PREFIX }}/service/new" class="btn-stats"
            style="background:#f59e0b; box-shadow:0 4px 6px rgba(245,158,11,0.2);">
             <i class="bi bi-plus-lg me-1"></i> Добавить
         </a>
@@ -99,7 +99,7 @@
             <div class="col-md-2 d-flex gap-2">
                 <button class="btn fw-bold flex-grow-1" style="border-radius:10px; background:#f59e0b; color:#fff;" onclick="applyFilters()">Найти</button>
                 {% if search or active_subtypes %}
-                <a href="/admin/service{% if filter_resources %}?filter_resources={{ filter_resources }}{% endif %}{% if sort_by and sort_by != 'default' %}{% if filter_resources %}&{% else %}?{% endif %}sort_by={{ sort_by }}{% endif %}"
+                <a href="{{ ADMIN_PREFIX }}/service{% if filter_resources %}?filter_resources={{ filter_resources }}{% endif %}{% if sort_by and sort_by != 'default' %}{% if filter_resources %}&{% else %}?{% endif %}sort_by={{ sort_by }}{% endif %}"
                    class="btn btn-outline-danger fw-bold" style="border-radius:10px;" title="Сбросить">
                     <i class="bi bi-x-lg"></i>
                 </a>
@@ -174,7 +174,7 @@
                     </span>
                 </td>
                 <td class="td-act">
-                    <a href="/admin/service/{{ e.id }}" class="btn-details">Открыть</a>
+                    <a href="{{ ADMIN_PREFIX }}/service/{{ e.id }}" class="btn-details">Открыть</a>
                 </td>
             </tr>
             {% else %}
@@ -265,13 +265,13 @@ function buildParams() {
 }
 
 function applyFilters() {
-    window.location.href = '/admin/service?' + buildParams().toString();
+    window.location.href = '{{ ADMIN_PREFIX }}/service?' + buildParams().toString();
 }
 
 function goToPage(p) {
     const params = buildParams();
     params.set('page', p);
-    window.location.href = '/admin/service?' + params.toString();
+    window.location.href = '{{ ADMIN_PREFIX }}/service?' + params.toString();
 }
 
 function removeSubtype(value) {
@@ -307,7 +307,7 @@ async function annotateAll() {
     resultDiv.style.display = 'none';
     _pendingAnnotateLinks = [];
     try {
-        const resp = await fetch('/admin/services/auto-annotate-all', {
+        const resp = await fetch('{{ ADMIN_PREFIX }}/services/auto-annotate-all', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({dry_run: true})
@@ -343,7 +343,7 @@ async function annotateAllConfirm() {
     const resultDiv = document.getElementById('annotateAllResult');
     resultDiv.innerHTML = '<div class="alert alert-info"><span class="spinner-border spinner-border-sm me-1"></span> Сохраняю...</div>';
     try {
-        const resp = await fetch('/admin/services/save-annotate-links', {
+        const resp = await fetch('{{ ADMIN_PREFIX }}/services/save-annotate-links', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({links: _pendingAnnotateLinks})

@@ -69,9 +69,57 @@ CATALOG_BIO_TYPE = PROP_BIO_TYPE.lower()
 app = FastAPI()
 load_dotenv()
 
+# === START ECOASSISTANT BASE_PATH PATCH ===
+BASE_PATH = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")
+
+def _eco_admin_url(url: str) -> str:
+    u = str(url).strip()
+    if u.startswith(("http://", "https://")):
+        return u
+    bp = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")
+    # Срезаем любые уже имеющиеся префиксы /ecoassistant и /admin, чтобы собрать чистый путь ровно 1 раз
+    while True:
+        if bp and u.startswith(bp + "/"):
+            u = u[len(bp):]
+        elif bp and u == bp:
+            u = "/"
+        elif u.startswith("/admin/"):
+            u = u[len("/admin"):]
+        elif u == "/admin":
+            u = "/"
+        else:
+            break
+    if not u.startswith("/"):
+        u = "/" + u
+    return f"{bp}/admin{u}" if bp else f"/admin{u}"
+
+_OrigRedirectResponse = RedirectResponse
+class RedirectResponse(_OrigRedirectResponse):
+    def __init__(self, url, *args, **kwargs):
+        super().__init__(url=_eco_admin_url(url), *args, **kwargs)
+# === END ECOASSISTANT BASE_PATH PATCH ===
+
+
+
+def _normalize_base_path(value: str) -> str:
+    """'/ecoassistant/', 'ecoassistant', '/ecoassistant' -> '/ecoassistant'; '', '/' -> ''."""
+    value = (value or "").strip().strip("/")
+    return f"/{value}" if value else ""
+
+
+# Публичный префикс, под которым приложение опубликовано (shared.env → BASE_PATH).
+# Префикс снимает внешний шлюз, внутрь приложения запросы приходят без него —
+# BASE_PATH нужен только для ссылок и редиректов, которые уходят в браузер.
+BASE_PATH = _normalize_base_path(os.getenv("BASE_PATH", ""))
+ADMIN_PREFIX = f"{BASE_PATH}/admin"
+
 app.mount("/admin/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static_root")
 templates = Jinja2Templates(directory="templates")
+templates.env.globals["base_path"] = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")
 templates.env.filters["tojson"] = lambda value, indent=None, **_: json.dumps(value, ensure_ascii=False, indent=indent)
+templates.env.globals["BASE_PATH"] = BASE_PATH
+templates.env.globals["ADMIN_PREFIX"] = ADMIN_PREFIX
 hb = BotHeartbeat(host=os.getenv('REDIS_HOST', 'redis'), port=int(os.getenv('REDIS_PORT', 6379)), db=2)
 settings_redis = aioredis.Redis(
     host=os.getenv('REDIS_HOST', 'redis'),
@@ -79,7 +127,13 @@ settings_redis = aioredis.Redis(
     db=0,
     decode_responses=True,
 )
-app.add_middleware(SessionMiddleware, secret_key=os.getenv('SESSION_SECRET_KEY', 'super-secret-key-for-admins'))
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv('SESSION_SECRET_KEY', 'super-secret-key-for-admins'),
+    # Своё имя и путь cookie: на общем домене (cloud-b) не пересекаемся с чужими приложениями
+    session_cookie="ecoassistant_admin_session",
+    path=ADMIN_PREFIX,
+)
 
 
 @app.on_event("startup")
@@ -141,14 +195,18 @@ async def is_bot_online_redis():
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     bot_online = await is_bot_online_redis()
 
     # Ошибки за 24 часа
     time_24h_ago = datetime.now(timezone.utc) - timedelta(hours=24)
-    q = select(func.count(ErrorLog.id)).where(ErrorLog.created_at >= time_24h_ago)
-    errors_24h = (await db.execute(q)).scalar() or 0
+    try:
+        q = select(func.count(ErrorLog.id)).where(ErrorLog.created_at >= time_24h_ago)
+        errors_24h = (await db.execute(q)).scalar() or 0
+    except Exception as _e:
+        await db.rollback()
+        errors_24h = 0
 
     # Статистика базы знаний
     kb_stats = {"flora": 0, "fauna": 0, "unclassified": 0, "geo": 0, "services": 0,
@@ -200,22 +258,26 @@ async def login(request: Request, username: str = Form(...), password: str = For
     with AdminSessionLocal() as session:
         user = session.query(AdminUser).filter(AdminUser.username == username).first()
     if not user or not _check_password(password, user.password_hash):
-        return RedirectResponse(url="/login?error=1", status_code=303)
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login?error=1", status_code=303)
     request.session["user_id"] = f"admin_{username}"
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/", status_code=303)
 
 @app.get("/logout")
 async def logout(request: Request):
     request.session.clear()
-    return RedirectResponse(url="/login")
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
 @app.get("/logs", response_class=HTMLResponse)
 async def view_logs(request: Request, db: AsyncSession = Depends(get_db)):
     bot_online = await is_bot_online_redis()
     # Берем последние 50 ошибок для полноты картины
-    query = select(ErrorLog).order_by(ErrorLog.created_at.desc()).limit(50)
-    result = await db.execute(query)
-    errors = result.scalars().all()
+    try:
+        query = select(ErrorLog).order_by(ErrorLog.created_at.desc()).limit(50)
+        result = await db.execute(query)
+        errors = result.scalars().all()
+    except Exception:
+        await db.rollback()
+        errors = []
     
     return templates.TemplateResponse("logs.html", {
         "request": request, "errors": errors, "active_page": "logs", "bot_online": bot_online
@@ -237,7 +299,7 @@ async def get_bot_status_api():
 async def chat_page(request: Request):
     # ПРОВЕРКА:
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     
     bot_online = await hb.is_alive()
     return templates.TemplateResponse("chat.html", {"request": request, "active_page": "chat", "bot_online": bot_online})
@@ -430,7 +492,7 @@ async def chat_transcribe(
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     bot_online = await is_bot_online_redis()
     prompts = {}
@@ -737,7 +799,7 @@ async def flora_list(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     return await _biological_list_impl(request, db, "flora", "flora", search, filter_resources, sort_by, page)
 
 
@@ -751,7 +813,7 @@ async def fauna_list(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     return await _biological_list_impl(request, db, "fauna", "fauna", search, filter_resources, sort_by, page)
 
 
@@ -765,14 +827,14 @@ async def unclassified_list(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     return await _biological_list_impl(request, db, "unclassified", "unclassified", search, filter_resources, sort_by, page)
 
 
 @app.get("/biological/new", response_class=HTMLResponse)
 async def biological_new(request: Request, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
 
     subtypes_options = await get_property_values(db, BIO_OBJECT_TYPE_ID, CATALOG_SUBTYPES)
@@ -814,7 +876,7 @@ async def biological_save(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     
  # 1. Сначала создаём словарь свойств
     props = _build_bio_object_properties(
@@ -862,13 +924,13 @@ async def biological_save(
         await _attach_text_to_object(db, object_id=obj.id, resource=res, structured_data={"description": description})
 
     await db.commit()
-    return RedirectResponse(url=f"/biological/{obj.id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{obj.id}", status_code=303)
 
 
 @app.get("/biological/{object_id}", response_class=HTMLResponse)
 async def biological_edit(request: Request, object_id: int, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
 
     obj = (await db.execute(select(Object).where(Object.id == object_id))).scalar()
@@ -1021,7 +1083,7 @@ async def biological_add_text(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _ensure_bio_object_exists(db, object_id)
     parsed_date = None
     if date.strip():
@@ -1035,7 +1097,7 @@ async def biological_add_text(
     )
     await _attach_text_to_object(db, object_id=object_id, resource=res, structured_data={"description": content})
     await db.commit()
-    return RedirectResponse(url=f"/biological/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{object_id}", status_code=303)
 
 
 @app.post("/biological/{object_id}/add_image")
@@ -1051,7 +1113,7 @@ async def biological_add_image(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _ensure_bio_object_exists(db, object_id)
     parsed_date = None
     if date.strip():
@@ -1066,7 +1128,7 @@ async def biological_add_image(
     )
     await _attach_image_to_object(db, object_id=object_id, resource=res, url=image_url, file_path=None, fmt=fmt)
     await db.commit()
-    return RedirectResponse(url=f"/biological/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{object_id}", status_code=303)
 
 
 @app.post("/biological/{object_id}/add_geo")
@@ -1082,7 +1144,7 @@ async def biological_add_geo(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _ensure_bio_object_exists(db, object_id)
     try:
         parsed_geojson = json.loads(geojson)
@@ -1101,7 +1163,7 @@ async def biological_add_geo(
     await _attach_geodata_to_object(db, object_id=object_id, resource=res, geojson=parsed_geojson,
                                     relation_type="ареал обитания вида")
     await db.commit()
-    return RedirectResponse(url=f"/biological/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{object_id}", status_code=303)
 
 
 @app.post("/biological/resource/delete/text/{resource_id}")
@@ -1112,10 +1174,10 @@ async def delete_biological_text_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 
 @app.post("/biological/resource/delete/image/{resource_id}")
@@ -1126,10 +1188,10 @@ async def delete_biological_image_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 
 @app.post("/biological/resource/delete/geo/{resource_id}")
@@ -1140,10 +1202,10 @@ async def delete_biological_geo_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 
 @app.post("/biological/resource/edit/text/{resource_id}")
@@ -1158,7 +1220,7 @@ async def edit_biological_text_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     res = (await db.execute(select(Resource).where(Resource.id == resource_id))).scalar()
     if not res:
         raise HTTPException(status_code=404)
@@ -1169,7 +1231,7 @@ async def edit_biological_text_resource(
         if tv:
             _apply_text_value_edit(tv, content, content_key, structured_json)
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 
 @app.post("/biological/resource/edit/image/{resource_id}")
@@ -1182,7 +1244,7 @@ async def edit_biological_image_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     res = (await db.execute(select(Resource).where(Resource.id == resource_id))).scalar()
     if not res:
         raise HTTPException(status_code=404)
@@ -1193,7 +1255,7 @@ async def edit_biological_image_resource(
         if iv:
             iv.url = image_url
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 
 @app.post("/biological/resource/edit/geo/{resource_id}")
@@ -1206,7 +1268,7 @@ async def edit_biological_geo_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     try:
         json.loads(geojson)
     except json.JSONDecodeError as exc:
@@ -1222,7 +1284,7 @@ async def edit_biological_geo_resource(
             {"gj": geojson, "id": rv.value_id},
         )
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 
 @app.post("/biological/get-map-html")
@@ -1273,7 +1335,7 @@ async def delete_image_resource(
     db: AsyncSession = Depends(get_db)
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await db.execute(delete(EntityRelation).where(
         (EntityRelation.source_id == image_id) & (EntityRelation.source_type == 'image_content')
     ))
@@ -1288,7 +1350,7 @@ async def delete_image_resource(
     ))
     await db.execute(delete(ImageContent).where(ImageContent.id == image_id))
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 
 @app.post("/resource/delete/text/{text_id}")
@@ -1299,13 +1361,13 @@ async def delete_text_modality(
     db: AsyncSession = Depends(get_db)
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await db.execute(delete(EntityRelation).where(
         (EntityRelation.source_id == text_id) & (EntityRelation.source_type == 'text_content')
     ))
     await db.execute(delete(TextContent).where(TextContent.id == text_id))
     await db.commit()
-    return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/biological/{entity_id}", status_code=303)
 
 # ==========================================
 # HELPERS: работа со схемой eco_assistant
@@ -1667,7 +1729,7 @@ async def geographical_list(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
 
     # 1. Счетчики
@@ -1858,7 +1920,7 @@ async def geographical_list(
 async def geographical_new(request: Request, db: AsyncSession = Depends(get_db)):
     """Страница с формой создания новой достопримечательности."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     bot_online = await is_bot_online_redis()
 
@@ -1904,7 +1966,7 @@ async def geographical_save(
 ):
     """Создать новую достопримечательность в eco_assistant.object + связанный ресурс-описание."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     # 1. Object + object_properties
     obj = Object(
@@ -1950,14 +2012,14 @@ async def geographical_save(
         )
 
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{obj.id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{obj.id}", status_code=303)
 
 
 @app.get("/geographical/{object_id}", response_class=HTMLResponse)
 async def geographical_edit(request: Request, object_id: int, db: AsyncSession = Depends(get_db)):
     """Карточка достопримечательности: синонимы, свойства и связанные ресурсы."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     bot_online = await is_bot_online_redis()
 
@@ -2130,7 +2192,7 @@ async def geographical_add_text(
 ):
     """Добавление текстового ресурса к достопримечательности."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     await _ensure_object_exists(db, object_id)
 
@@ -2154,7 +2216,7 @@ async def geographical_add_text(
         structured_data={"description": content},
     )
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{object_id}", status_code=303)
 
 
 @app.post("/geographical/{object_id}/add_image")
@@ -2171,7 +2233,7 @@ async def geographical_add_image(
 ):
     """Добавление изображения к достопримечательности."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     await _ensure_object_exists(db, object_id)
 
@@ -2196,7 +2258,7 @@ async def geographical_add_image(
         url=image_url, file_path=None, fmt=fmt,
     )
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{object_id}", status_code=303)
 
 
 @app.post("/geographical/{object_id}/add_geo")
@@ -2213,7 +2275,7 @@ async def geographical_add_geo(
 ):
     """Добавление геоданных (GeoJSON) к достопримечательности."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     await _ensure_object_exists(db, object_id)
 
@@ -2239,7 +2301,7 @@ async def geographical_add_geo(
     )
     await _attach_geodata_to_object(db, object_id=object_id, resource=res, geojson=parsed_geojson)
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{object_id}", status_code=303)
 
 
 async def _delete_resource_with_values(db: AsyncSession, resource_id: int):
@@ -2290,10 +2352,10 @@ async def delete_geographical_text_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{entity_id}", status_code=303)
 
 
 @app.post("/geographical/resource/delete/image/{resource_id}")
@@ -2304,10 +2366,10 @@ async def delete_geographical_image_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{entity_id}", status_code=303)
 
 
 @app.post("/geographical/resource/delete/geo/{resource_id}")
@@ -2318,10 +2380,10 @@ async def delete_geographical_geo_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{entity_id}", status_code=303)
 
 
 def _geojson_bounds(geojson: dict):
@@ -2406,7 +2468,7 @@ async def edit_geographical_text_resource(
 ):
     """Обновить заголовок и содержимое текстового ресурса."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     res = (await db.execute(select(Resource).where(Resource.id == resource_id))).scalar()
     if not res:
         raise HTTPException(status_code=404)
@@ -2417,7 +2479,7 @@ async def edit_geographical_text_resource(
         if tv:
             _apply_text_value_edit(tv, content, content_key, structured_json)
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{entity_id}", status_code=303)
 
 
 @app.post("/geographical/resource/edit/image/{resource_id}")
@@ -2431,7 +2493,7 @@ async def edit_geographical_image_resource(
 ):
     """Обновить заголовок и URL изображения."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     res = (await db.execute(select(Resource).where(Resource.id == resource_id))).scalar()
     if not res:
         raise HTTPException(status_code=404)
@@ -2442,7 +2504,7 @@ async def edit_geographical_image_resource(
         if iv:
             iv.url = image_url
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{entity_id}", status_code=303)
 
 
 @app.post("/geographical/resource/edit/geo/{resource_id}")
@@ -2456,7 +2518,7 @@ async def edit_geographical_geo_resource(
 ):
     """Обновить заголовок и геометрию геоданных."""
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     try:
         json.loads(geojson)
     except json.JSONDecodeError as exc:
@@ -2476,7 +2538,7 @@ async def edit_geographical_geo_resource(
             {"gj": geojson, "id": rv.value_id},
         )
     await db.commit()
-    return RedirectResponse(url=f"/geographical/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/geographical/{entity_id}", status_code=303)
 
 
 # ==========================================
@@ -2494,7 +2556,7 @@ async def service_list(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
 
     counts_raw = await db.execute(sql_text("""
@@ -2672,7 +2734,7 @@ async def service_list(
 @app.get("/service/new", response_class=HTMLResponse)
 async def service_new(request: Request, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
     subtypes_options = await get_property_values(db, SERVICE_OBJECT_TYPE_ID, CATALOG_SUBTYPES)
     region_options = await get_property_values(db, SERVICE_OBJECT_TYPE_ID, CATALOG_REGION)
@@ -2712,7 +2774,7 @@ async def service_save(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     
     # 1. Собираем properties и жёстко фиксируем основное название
     props = _build_object_properties(
@@ -2751,13 +2813,13 @@ async def service_save(
         )
         await _attach_text_to_object(db, object_id=obj.id, resource=res, structured_data={"description": description})
     await db.commit()
-    return RedirectResponse(url=f"/service/{obj.id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{obj.id}", status_code=303)
 
 
 @app.get("/service/{object_id}", response_class=HTMLResponse)
 async def service_edit(request: Request, object_id: int, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
     obj = (await db.execute(select(Object).where(Object.id == object_id))).scalar()
     if not obj or obj.object_type_id != SERVICE_OBJECT_TYPE_ID:
@@ -3109,7 +3171,7 @@ async def service_add_text(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _ensure_service_object_exists(db, object_id)
     parsed_date = None
     if date.strip():
@@ -3121,7 +3183,7 @@ async def service_add_text(
                                           source_name=source.strip(), reliability_name=reliability.strip(), date_value=parsed_date)
     await _attach_text_to_object(db, object_id=object_id, resource=res, structured_data={"description": content})
     await db.commit()
-    return RedirectResponse(url=f"/service/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{object_id}", status_code=303)
 
 
 @app.post("/service/{object_id}/add_image")
@@ -3132,7 +3194,7 @@ async def service_add_image(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _ensure_service_object_exists(db, object_id)
     parsed_date = None
     if date.strip():
@@ -3145,7 +3207,7 @@ async def service_add_image(
                                           source_name=source.strip(), reliability_name=reliability.strip(), date_value=parsed_date)
     await _attach_image_to_object(db, object_id=object_id, resource=res, url=image_url, file_path=None, fmt=fmt)
     await db.commit()
-    return RedirectResponse(url=f"/service/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{object_id}", status_code=303)
 
 
 @app.post("/service/{object_id}/add_geo")
@@ -3156,7 +3218,7 @@ async def service_add_geo(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _ensure_service_object_exists(db, object_id)
     try:
         parsed_geojson = json.loads(geojson)
@@ -3172,7 +3234,7 @@ async def service_add_geo(
                                           source_name=source.strip(), reliability_name=reliability.strip(), date_value=parsed_date)
     await _attach_geodata_to_object(db, object_id=object_id, resource=res, geojson=parsed_geojson, relation_type="местоположение услуги")
     await db.commit()
-    return RedirectResponse(url=f"/service/{object_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{object_id}", status_code=303)
 
 
 @app.post("/service/resource/delete/text/{resource_id}")
@@ -3180,10 +3242,10 @@ async def delete_service_text_resource(
     request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/service/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{entity_id}", status_code=303)
 
 
 @app.post("/service/resource/delete/image/{resource_id}")
@@ -3191,10 +3253,10 @@ async def delete_service_image_resource(
     request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/service/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{entity_id}", status_code=303)
 
 
 @app.post("/service/resource/delete/geo/{resource_id}")
@@ -3202,10 +3264,10 @@ async def delete_service_geo_resource(
     request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await _delete_resource_with_values(db, resource_id)
     await db.commit()
-    return RedirectResponse(url=f"/service/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{entity_id}", status_code=303)
 
 
 @app.post("/service/resource/edit/text/{resource_id}")
@@ -3216,7 +3278,7 @@ async def edit_service_text_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     res = (await db.execute(select(Resource).where(Resource.id == resource_id))).scalar()
     if not res:
         raise HTTPException(status_code=404)
@@ -3227,7 +3289,7 @@ async def edit_service_text_resource(
         if tv:
             _apply_text_value_edit(tv, content, content_key, structured_json)
     await db.commit()
-    return RedirectResponse(url=f"/service/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{entity_id}", status_code=303)
 
 
 @app.post("/service/resource/edit/image/{resource_id}")
@@ -3237,7 +3299,7 @@ async def edit_service_image_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     res = (await db.execute(select(Resource).where(Resource.id == resource_id))).scalar()
     if not res:
         raise HTTPException(status_code=404)
@@ -3248,7 +3310,7 @@ async def edit_service_image_resource(
         if iv:
             iv.url = image_url
     await db.commit()
-    return RedirectResponse(url=f"/service/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{entity_id}", status_code=303)
 
 
 @app.post("/service/resource/edit/geo/{resource_id}")
@@ -3258,7 +3320,7 @@ async def edit_service_geo_resource(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     try:
         json.loads(geojson)
     except json.JSONDecodeError as exc:
@@ -3274,7 +3336,7 @@ async def edit_service_geo_resource(
             {"gj": geojson, "id": rv.value_id},
         )
     await db.commit()
-    return RedirectResponse(url=f"/service/{entity_id}", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/service/{entity_id}", status_code=303)
 
 
 @app.post("/service/get-map-html")
@@ -3599,7 +3661,7 @@ async def res_res_link_delete(
 @app.get("/testing", response_class=HTMLResponse)
 async def testing_list(request: Request, db: AsyncSession = Depends(get_db), admin_db = Depends(get_admin_db)):
     user_id = request.session.get("user_id")
-    if not user_id: return RedirectResponse(url="/login")
+    if not user_id: return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     
     # Загружаем ВСЕ объекты для модалки
     res = await db.execute(select(BiologicalEntity).order_by(BiologicalEntity.common_name_ru))
@@ -3625,7 +3687,7 @@ async def start_new_test(
     admin_db = Depends(get_admin_db)
 ):
     user_id = request.session.get("user_id")
-    if not user_id: return RedirectResponse(url="/login")
+    if not user_id: return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
 
     target_url = f"{TEST_API_BASE.strip()}/start"
     
@@ -3665,7 +3727,7 @@ async def start_new_test(
                 )
                 admin_db.add(new_session)
                 admin_db.commit()
-                return RedirectResponse(url="/testing", status_code=303)
+                return RedirectResponse(url=f"{ADMIN_PREFIX}/testing", status_code=303)
             else:
                 return HTMLResponse(
                     content=f"<h3>Ошибка API ({resp.status_code}):</h3><pre>{resp.text}</pre>", 
@@ -3743,7 +3805,7 @@ async def get_test_results_api(session_id: str, admin_db = Depends(get_admin_db)
 @app.get("/properties", response_class=HTMLResponse)
 async def properties_list_page(request: Request, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
     object_types = (await db.execute(select(ObjectType).order_by(ObjectType.id))).scalars().all()
     properties = (await db.execute(
@@ -3767,7 +3829,7 @@ async def properties_new(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     values_list = [v.strip() for v in property_values.split(",") if v.strip()]
     prop = ObjectProperty(
         object_type_id=object_type_id,
@@ -3777,7 +3839,7 @@ async def properties_new(
     )
     db.add(prop)
     await db.commit()
-    return RedirectResponse(url="/properties", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/properties", status_code=303)
 
 
 @app.post("/properties/{prop_id}/edit")
@@ -3792,13 +3854,13 @@ async def properties_edit(
     Флаг is_multiple теперь управляется отдельно через POST /properties/{prop_id}/update_settings.
     """
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     prop = (await db.execute(select(ObjectProperty).where(ObjectProperty.id == prop_id))).scalar()
     if not prop:
         raise HTTPException(status_code=404)
     prop.property_values = [v.strip() for v in property_values.split(",") if v.strip()]
     await db.commit()
-    return RedirectResponse(url="/properties", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/properties", status_code=303)
 
 
 @app.post("/properties/{prop_id}/delete")
@@ -3808,10 +3870,10 @@ async def properties_delete(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await db.execute(delete(ObjectProperty).where(ObjectProperty.id == prop_id))
     await db.commit()
-    return RedirectResponse(url="/properties", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/properties", status_code=303)
 
 
 @app.post("/properties/{prop_id}/update_settings")
@@ -3850,7 +3912,7 @@ async def properties_update_settings(
 @app.get("/features", response_class=HTMLResponse)
 async def features_list_page(request: Request, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
     modalities = (await db.execute(select(Modality).order_by(Modality.id))).scalars().all()
     features = (await db.execute(
@@ -3874,7 +3936,7 @@ async def features_new(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     values_list = [v.strip() for v in feature_values.split(",") if v.strip()]
     feat = ResourceFeature(
         modality_id=modality_id,
@@ -3883,7 +3945,7 @@ async def features_new(
     )
     db.add(feat)
     await db.commit()
-    return RedirectResponse(url="/features", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/features", status_code=303)
 
 
 @app.post("/features/{feat_id}/edit")
@@ -3894,13 +3956,13 @@ async def features_edit(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     feat = (await db.execute(select(ResourceFeature).where(ResourceFeature.id == feat_id))).scalar()
     if not feat:
         raise HTTPException(status_code=404)
     feat.feature_values = [v.strip() for v in feature_values.split(",") if v.strip()]
     await db.commit()
-    return RedirectResponse(url="/features", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/features", status_code=303)
 
 
 @app.post("/features/{feat_id}/delete")
@@ -3910,10 +3972,10 @@ async def features_delete(
     db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await db.execute(delete(ResourceFeature).where(ResourceFeature.id == feat_id))
     await db.commit()
-    return RedirectResponse(url="/features", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/features", status_code=303)
 
 
 # ==========================================
@@ -4197,7 +4259,7 @@ async def annotator_task(request: Request, task_id: str):
 @app.get("/link-types", response_class=HTMLResponse)
 async def link_types_page(request: Request, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     bot_online = await is_bot_online_redis()
     obj_obj_types = (await db.execute(
         select(ObjectObjectRelationType).order_by(ObjectObjectRelationType.name)
@@ -4221,64 +4283,64 @@ async def link_types_page(request: Request, db: AsyncSession = Depends(get_db)):
 @app.post("/link-types/obj-obj/new")
 async def obj_obj_type_new(request: Request, name: str = Form(...), db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     db.add(ObjectObjectRelationType(name=name.strip()))
     try:
         await db.commit()
     except Exception:
         await db.rollback()
-    return RedirectResponse(url="/link-types", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/link-types", status_code=303)
 
 
 @app.post("/link-types/obj-obj/{type_id}/delete")
 async def obj_obj_type_delete(request: Request, type_id: int, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await db.execute(delete(ObjectObjectRelationType).where(ObjectObjectRelationType.id == type_id))
     await db.commit()
-    return RedirectResponse(url="/link-types", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/link-types", status_code=303)
 
 
 @app.post("/link-types/res-res/new")
 async def res_res_type_new(request: Request, name: str = Form(...), db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     db.add(ResourceResourceRelationType(name=name.strip()))
     try:
         await db.commit()
     except Exception:
         await db.rollback()
-    return RedirectResponse(url="/link-types", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/link-types", status_code=303)
 
 
 @app.post("/link-types/res-res/{type_id}/delete")
 async def res_res_type_delete(request: Request, type_id: int, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await db.execute(delete(ResourceResourceRelationType).where(ResourceResourceRelationType.id == type_id))
     await db.commit()
-    return RedirectResponse(url="/link-types", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/link-types", status_code=303)
 
 
 @app.post("/link-types/res-obj/new")
 async def res_obj_type_new(request: Request, name: str = Form(...), db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     db.add(ResourceObjectRelationType(name=name.strip()))
     try:
         await db.commit()
     except Exception:
         await db.rollback()
-    return RedirectResponse(url="/link-types", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/link-types", status_code=303)
 
 
 @app.post("/link-types/res-obj/{type_id}/delete")
 async def res_obj_type_delete(request: Request, type_id: int, db: AsyncSession = Depends(get_db)):
     if not request.session.get("user_id"):
-        return RedirectResponse(url="/login")
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     await db.execute(delete(ResourceObjectRelationType).where(ResourceObjectRelationType.id == type_id))
     await db.commit()
-    return RedirectResponse(url="/link-types", status_code=303)
+    return RedirectResponse(url=f"{ADMIN_PREFIX}/link-types", status_code=303)
 
 # ==========================================
 # CMS: УПРАВЛЕНИЕ СИНОНИМАМИ ОБЪЕКТА

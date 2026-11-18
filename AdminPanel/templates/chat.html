@@ -13,7 +13,7 @@
         </div>
         <div>
             <span class="text-muted small">ID: <b>{{ request.session.user_id }}</b></span>
-            <a href="/admin/logout" class="btn btn-sm btn-link text-danger ms-2">Выйти</a>
+            <a href="{{ ADMIN_PREFIX }}/logout" class="btn btn-sm btn-link text-danger ms-2">Выйти</a>
         </div>
     </div>
 </div>
@@ -106,7 +106,7 @@ async function sendMessage(overrideText = null, isCallback = false) {
     loading.classList.remove('d-none');
 
     try {
-        const response = await fetch('/admin/chat/search', {
+        const response = await fetch('{{ ADMIN_PREFIX }}/chat/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: text })
@@ -542,7 +542,7 @@ async function sendCallback(payload) {
     const loading = document.getElementById('loading-indicator');
     loading.classList.remove('d-none');
     try {
-        const response = await fetch('/admin/chat/callback', {
+        const response = await fetch('{{ ADMIN_PREFIX }}/chat/callback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ payload })
@@ -659,7 +659,7 @@ sendMessage = async function(overrideText = null, isCallback = false) {
             const fd = new FormData();
             fd.append('file', fileToSend);
 
-            const r = await fetch('/admin/chat/predict_plant?top_k=1', {
+            const r = await fetch('{{ ADMIN_PREFIX }}/chat/predict_plant?top_k=1', {
                 method: 'POST',
                 body: fd
             });
@@ -790,7 +790,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fd = new FormData();
             fd.append('file', blob, `voice.${ext}`);
 
-            const r = await fetch('/admin/chat/transcribe', { method: 'POST', body: fd });
+            const r = await fetch('{{ ADMIN_PREFIX }}/chat/transcribe', { method: 'POST', body: fd });
             if (!(r.headers.get('content-type') || '').includes('json')) return;
 
             const data = await r.json();

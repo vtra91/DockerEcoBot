@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 import hashlib
 import binascii
@@ -11,7 +12,7 @@ from shapely import wkb
 import json
 
 from typing import List
-from fastapi import FastAPI, Request, Depends, Body, Form, Depends, HTTPException, Query
+from fastapi import FastAPI, Request, Depends, Body, Form, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,9 +23,9 @@ from sqlalchemy import func, delete, or_, create_engine, insert, update, text as
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timedelta, timezone
 
-
 from database import get_db
-from models.models import ErrorLog, BiologicalEntity, TextContent, ImageContent, EntityRelation, EntityIdentifier, EntityIdentifierLink, GeographicalEntity, EntityGeo, MapContent
+from models.models import ErrorLog, BiologicalEntity, TextContent, ImageContent, EntityRelation, EntityIdentifier, \
+    EntityIdentifierLink, GeographicalEntity, EntityGeo, MapContent
 from models.admin_models import AdminBase, TestSession, AdminUser
 from models.eco_assistant_models import (
     Object, ObjectType, ObjectNameSynonym, object_name_synonym_link,
@@ -71,7 +72,6 @@ load_dotenv()
 app.mount("/admin/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["tojson"] = lambda value, indent=None, **_: json.dumps(value, ensure_ascii=False, indent=indent)
-import re
 
 def _slugify(value):
     """Превращает строку в безопасный CSS-идентификатор:
@@ -95,7 +95,11 @@ app.add_middleware(SessionMiddleware, secret_key=os.getenv('SESSION_SECRET_KEY',
 async def _init_redis_settings():
     await settings_redis.set("settings:promo_enabled", "1", nx=True)
     await settings_redis.set("settings:multi_act_dialog", "1", nx=True)
+
+
 CORE_API_BASE = os.getenv("CORE_API_BASE", "http://core-api:5001")
+# ГОРЯЧАЯ СМЕНА ПРОВАЙДЕРА: раньше /reload уходил ТОЛЬКО в core-api
+BACKEND_BASE = os.getenv("BACKEND_BASE", "http://backend:8000")
 SHARED_ENV_PATH = Path("/app/shared.env")
 ADMIN_ENV_PATH = Path("/app/.env")
 ADMIN_DB_URL = os.getenv('ADMIN_DB_URL')
@@ -129,6 +133,7 @@ def _ensure_default_admin():
             session.commit()
             print(f"[Admin] Default user created: login={username}")
 
+
 _ensure_default_admin()
 
 
@@ -139,9 +144,11 @@ def get_admin_db():
     finally:
         db.close()
 
+
 TEST_API_BASE = os.getenv('TEST_API_BASE')
 TEST_TOKEN = os.getenv('TEST_TOKEN')
 TEST_HEADERS = {"Authorization": f"Bearer {TEST_TOKEN}", "Content-Type": "application/json"}
+
 
 async def is_bot_online_redis():
     return await hb.is_alive()
@@ -180,14 +187,14 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         """))).all()
         res_map = {r.modality_type: int(r.cnt) for r in res_rows}
         kb_stats = {
-            "flora":       int(obj_row.flora or 0),
-            "fauna":       int(obj_row.fauna or 0),
+            "flora": int(obj_row.flora or 0),
+            "fauna": int(obj_row.fauna or 0),
             "unclassified": int(obj_row.unclassified or 0),
-            "geo":         int(obj_row.geo or 0),
-            "services":    int(obj_row.services or 0),
-            "texts":       res_map.get("Текст", 0),
-            "images":      res_map.get("Изображение", 0),
-            "geodata":     res_map.get("Геоданные", 0),
+            "geo": int(obj_row.geo or 0),
+            "services": int(obj_row.services or 0),
+            "texts": res_map.get("Текст", 0),
+            "images": res_map.get("Изображение", 0),
+            "geodata": res_map.get("Геоданные", 0),
         }
     except Exception as e:
         print(f"[Dashboard] KB stats query failed: {e}")
@@ -200,9 +207,11 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "kb_stats": kb_stats,
     })
 
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = None):
     return templates.TemplateResponse("login.html", {"request": request, "error": error})
+
 
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
@@ -213,10 +222,12 @@ async def login(request: Request, username: str = Form(...), password: str = For
     request.session["user_id"] = f"admin_{username}"
     return RedirectResponse(url="/", status_code=303)
 
+
 @app.get("/logout")
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login")
+
 
 @app.get("/logs", response_class=HTMLResponse)
 async def view_logs(request: Request, db: AsyncSession = Depends(get_db)):
@@ -225,10 +236,11 @@ async def view_logs(request: Request, db: AsyncSession = Depends(get_db)):
     query = select(ErrorLog).order_by(ErrorLog.created_at.desc()).limit(50)
     result = await db.execute(query)
     errors = result.scalars().all()
-    
+
     return templates.TemplateResponse("logs.html", {
         "request": request, "errors": errors, "active_page": "logs", "bot_online": bot_online
     })
+
 
 @app.get("/logs/stats", response_class=HTMLResponse)
 async def view_stats(request: Request, db: AsyncSession = Depends(get_db)):
@@ -237,19 +249,23 @@ async def view_stats(request: Request, db: AsyncSession = Depends(get_db)):
         "request": request, "active_page": "logs", "bot_online": bot_online
     })
 
+
 @app.get("/bot-status")
 async def get_bot_status_api():
     online = await hb.is_alive()
     return {"online": online}
+
 
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
     # ПРОВЕРКА:
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
-    
+
     bot_online = await hb.is_alive()
-    return templates.TemplateResponse("chat.html", {"request": request, "active_page": "chat", "bot_online": bot_online})
+    return templates.TemplateResponse("chat.html",
+                                      {"request": request, "active_page": "chat", "bot_online": bot_online})
+
 
 @app.post("/chat/classify")
 async def classify_proxy(request: Request, data: dict = Body(...)):
@@ -271,10 +287,10 @@ async def classify_proxy(request: Request, data: dict = Body(...)):
 
 
 _CALLBACK_QUERIES: dict[str, str] = {
-    "desc":  "Расскажи о {}",
+    "desc": "Расскажи о {}",
     "photo": "Покажи фото {}",
-    "map":   "Где обитает {}",
-    "text":  "Расскажи о {}",
+    "map": "Где обитает {}",
+    "text": "Расскажи о {}",
 }
 
 
@@ -291,6 +307,21 @@ async def set_promo_setting(request: Request, data: dict = Body(...)):
     return {"promo_enabled": enabled}
 
 
+@app.get("/chat/multi-act-setting")
+async def get_multi_act_setting(request: Request):
+    val = await settings_redis.get("settings:multi_act_dialog")
+    return {"multi_act_enabled": val != "0"}
+
+
+@app.post("/chat/multi-act-setting")
+async def set_multi_act_setting(request: Request, data: dict = Body(...)):
+    if not request.session.get("user_id"):
+        raise HTTPException(status_code=401)
+    enabled = bool(data.get("enabled", True))
+    await settings_redis.set("settings:multi_act_dialog", "1" if enabled else "0")
+    return {"multi_act_enabled": enabled}
+
+
 @app.post("/chat/search")
 async def search_proxy(request: Request, data: dict = Body(...)):
     user_id = request.session.get("user_id")
@@ -301,11 +332,13 @@ async def search_proxy(request: Request, data: dict = Body(...)):
         return {"error": "пустой запрос"}
     promo_val = await settings_redis.get("settings:promo_enabled")
     promo_enabled = promo_val != "0"
+    multi_act_enabled = (await settings_redis.get("settings:multi_act_dialog")) != "0"
     async with httpx.AsyncClient(timeout=httpx.Timeout(150.0)) as client:
         try:
             response = await client.post(
                 f"{CORE_API_BASE}/search_pipeline",
-                json={"query": query, "user_id": user_id, "promo_enabled": promo_enabled}
+                json={"query": query, "user_id": user_id, "promo_enabled": promo_enabled,
+                      "multi_act_enabled": multi_act_enabled}
             )
             return response.json()
         except Exception as e:
@@ -320,6 +353,7 @@ async def callback_proxy(request: Request, data: dict = Body(...)):
     payload = data.get("payload", "")
     promo_val = await settings_redis.get("settings:promo_enabled")
     promo_enabled = promo_val != "0"
+    multi_act_enabled = (await settings_redis.get("settings:multi_act_dialog")) != "0"
     async with httpx.AsyncClient(timeout=httpx.Timeout(150.0)) as client:
         try:
             if payload == "more:next":
@@ -340,14 +374,57 @@ async def callback_proxy(request: Request, data: dict = Body(...)):
                     return {"error": "Неизвестный тип кнопки"}
                 response = await client.post(
                     f"{CORE_API_BASE}/search_pipeline",
-                    json={"query": template.format(name), "user_id": user_id, "promo_enabled": promo_enabled}
+                    json={"query": template.format(name), "user_id": user_id, "promo_enabled": promo_enabled,
+                          "multi_act_enabled": multi_act_enabled}
                 )
             return response.json()
         except Exception as e:
             return {"error": f"Ошибка Core API: {str(e)}"}
 
 
+PLANT_API_URL = os.getenv("PLANT_API_URL", "http://194.156.118.21:8020/predict")
+STT_URL = os.getenv("STT_URL", "http://stt-service:8081").rstrip("/")
+
+
+@app.post("/chat/predict_plant")
+async def predict_plant(
+        request: Request,
+        file: UploadFile = File(...),
+        top_k: int = Query(3, ge=1, le=10),
+):
+    if not request.session.get("user_id"):
+        return {"error": "не авторизован"}
+    content = await file.read()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+        try:
+            r = await client.post(
+                PLANT_API_URL,
+                params={"top_k": top_k},
+                files={"file": (file.filename, content, file.content_type or "image/jpeg")},
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            return {"error": f"Ошибка Plant API: {e}"}
+
+    preds = data.get("predictions", [])
+    if not preds:
+        return {"error": "Не удалось распознать растение"}
+
+    top = preds[0]
+    name = top.get("russian_name") or top.get("latin_name") or "неизвестное растение"
+    pct = round((top.get("confidence") or 0) * 100, 1)
+    return {
+        "name": name,
+        "latin": top.get("latin_name"),
+        "confidence": pct,
+        "all": preds,
+        "message": f"На картинке <b>{name}</b>. Рассказать подробнее?",
+    }
+
+
 _CONFIG_SCHEMA_PATH = Path(__file__).parent / "config_schema.json"
+
 
 def _load_config_schema() -> dict:
     try:
@@ -355,6 +432,54 @@ def _load_config_schema() -> dict:
     except Exception as e:
         print(f"[Settings] Ошибка загрузки схемы конфига: {e}")
         return {"tabs": []}
+
+
+@app.post("/chat/transcribe")
+async def chat_transcribe(
+        request: Request,
+        file: UploadFile = File(...),
+):
+    if not request.session.get("user_id"):
+        return {"error": "не авторизован"}
+
+    content = await file.read()
+    if not content:
+        return {"error": "Пустой файл"}
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(170.0)) as client:
+        try:
+            r = await client.post(
+                f"{STT_URL}/transcribe",
+                files={
+                    "file": (
+                        file.filename or "voice.webm",
+                        content,
+                        file.content_type or "application/octet-stream",
+                    )
+                },
+            )
+        except Exception as e:
+            return {"error": f"STT-сервис недоступен: {e}"}
+
+    try:
+        data = r.json()
+    except ValueError:
+        return {"error": f"STT вернул не JSON (HTTP {r.status_code})"}
+
+    if r.status_code != 200:
+        err = data.get("error") or {}
+        return {
+            "error": err.get("message") or f"STT вернул HTTP {r.status_code}",
+            "code": err.get("code"),
+            "details": err.get("details"),
+        }
+
+    return {
+        "text": data.get("text", ""),
+        "language": data.get("language"),
+        "duration_seconds": data.get("duration_seconds"),
+        "model": data.get("model"),
+    }
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -401,25 +526,81 @@ async def save_prompts(request: Request, data: dict = Body(...)):
         raise HTTPException(status_code=500, detail="Ошибка сохранения промптов")
 
 
+async def _hot_reload_all() -> dict:
+    """ Раскидывает сигнал /reload по всем контейнерам, которые читают LLM_*.
+    Возвращает отчёт по каждому сервису
+    """
+    result: dict = {}
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        for name, url in (("core-api", CORE_API_BASE), ("backend", BACKEND_BASE)):
+            try:
+                resp = await client.post(f"{url}/reload")
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = {"raw": resp.text[:300]}
+                result[name] = {
+                    "ok": resp.status_code == 200 and body.get("status") != "error",
+                    "status_code": resp.status_code,
+                    "detail": body,
+                }
+            except Exception as exc:
+                result[name] = {"ok": False, "error": str(exc)}
+
+    #  max не слушает HTTP, поэтому ему — Redis pub/sub.
+    #  Публикуем ЗДЕСЬ, а не полагаемся на core-api: если тот недоступен,
+    #  max всё равно должен узнать о новой настройке.
+    redis_ok = False
+    try:
+        await settings_redis.publish("config:reload", "1")
+        redis_ok = True
+    except Exception as exc:
+        print(f"[Settings] Redis publish failed: {exc}")
+
+    result["max"] = {"ok": redis_ok, "via": "redis pub/sub config:reload"}
+    return result
+
+
 @app.post("/settings/shared")
 async def save_shared(request: Request, data: dict = Body(...)):
-    """Сохраняем общие настройки в shared.env и сигнализируем core-api о перезагрузке конфига"""
+    """ Сохраняем общие настройки в shared.env и применяем их БЕЗ пересоздания. """
     if not request.session.get("user_id"):
         raise HTTPException(status_code=401)
     if not SHARED_ENV_PATH.exists():
         SHARED_ENV_PATH.touch()
     for key, value in data.items():
         set_key(str(SHARED_ENV_PATH), key, str(value))
-    reload_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(f"{CORE_API_BASE}/reload")
-            reload_ok = resp.status_code == 200
-    except Exception as e:
-        print(f"[Settings] Hot-reload signal failed: {e}")
-    if reload_ok:
-        return {"status": "success", "message": "Настройки сохранены и применены (LLM параметры — мгновенно, остальные — после перезапуска)"}
-    return {"status": "success", "message": "Настройки сохранены. LLM параметры применятся после перезапуска core-api (сигнал не прошёл)."}
+
+    import asyncio as _asyncio
+    await _asyncio.sleep(0.05)
+
+    results = await _hot_reload_all()
+    applied = [name for name, info in results.items() if info.get("ok")]
+
+    if not any(k.startswith(("LLM_", "GIGACHAT_")) for k in data):
+        return {
+            "status": "success",
+            "message": "Настройки сохранены. Не-LLM параметры применятся после перезапуска сервисов.",
+            "reload": results,
+        }
+
+    if applied:
+        return {
+            "status": "success",
+            "message": f"LLM-настройки применены мгновенно: {', '.join(applied)}.",
+            "reload": results,
+        }
+
+    return {
+        "status": "error",
+        "message": (
+            "Настройки сохранены, но сигнал не дошёл ни до одного сервиса. "
+            "Проверьте volume './shared.env:/app/shared.env:ro' в docker-compose.yml "
+            "и один раз пересоздайте: docker compose up -d --force-recreate backend core-api max"
+        ),
+        "reload": results,
+    }
 
 
 @app.post("/settings/admin")
@@ -433,19 +614,20 @@ async def save_admin_config(request: Request, data: dict = Body(...)):
         set_key(str(ADMIN_ENV_PATH), key, str(value))
     return {"status": "success", "message": "Настройки AdminPanel сохранены. Перезапустите admin-сервис."}
 
+
 # ==========================================
 # CMS: ФЛОРА И ФАУНА (eco_assistant схема)
 # ==========================================
 
 async def _biological_list_impl(
-    request: Request,
-    db: AsyncSession,
-    active_page: str,
-    forced_bio_type: str | None,
-    search: str | None,
-    filter_resources: list[str],
-    sort_by: str,
-    page: int,
+        request: Request,
+        db: AsyncSession,
+        active_page: str,
+        forced_bio_type: str | None,
+        search: str | None,
+        filter_resources: list[str],
+        sort_by: str,
+        page: int,
 ):
     """Общая логика списка биологических объектов. forced_bio_type: 'flora'|'fauna'|'unclassified'|None."""
     bot_online = await is_bot_online_redis()
@@ -508,15 +690,15 @@ async def _biological_list_impl(
     """), {"otid": BIO_OBJECT_TYPE_ID})
     sr = stats_raw.first()
     stats = {
-        "total":          int(sr.total),
-        "has_text":       int(sr.has_text),
-        "has_image":      int(sr.has_image),
-        "has_geo":        int(sr.has_geo),
-        "no_resources":   int(sr.no_resources),
-        "has_links":      int(sr.has_links),
-        "flora":          int(sr.flora_count),
-        "fauna":          int(sr.fauna_count),
-        "unclassified":   int(sr.unclassified_count),
+        "total": int(sr.total),
+        "has_text": int(sr.has_text),
+        "has_image": int(sr.has_image),
+        "has_geo": int(sr.has_geo),
+        "no_resources": int(sr.no_resources),
+        "has_links": int(sr.has_links),
+        "flora": int(sr.flora_count),
+        "fauna": int(sr.fauna_count),
+        "unclassified": int(sr.unclassified_count),
     }
 
     # 3. Основной запрос
@@ -637,8 +819,8 @@ async def _biological_list_impl(
         })
 
     template_map = {
-        "flora":        "flora_list.html",
-        "fauna":        "fauna_list.html",
+        "flora": "flora_list.html",
+        "fauna": "fauna_list.html",
         "unclassified": "unclassified_list.html",
     }
     return templates.TemplateResponse(template_map[active_page], {
@@ -659,12 +841,12 @@ async def _biological_list_impl(
 
 @app.get("/flora", response_class=HTMLResponse)
 async def flora_list(
-    request: Request,
-    search: str = None,
-    filter_resources: List[str] = Query(default=[]),
-    sort_by: str = "default",
-    page: int = 1,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        search: str = None,
+        filter_resources: List[str] = Query(default=[]),
+        sort_by: str = "default",
+        page: int = 1,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -673,12 +855,12 @@ async def flora_list(
 
 @app.get("/fauna", response_class=HTMLResponse)
 async def fauna_list(
-    request: Request,
-    search: str = None,
-    filter_resources: List[str] = Query(default=[]),
-    sort_by: str = "default",
-    page: int = 1,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        search: str = None,
+        filter_resources: List[str] = Query(default=[]),
+        sort_by: str = "default",
+        page: int = 1,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -687,16 +869,17 @@ async def fauna_list(
 
 @app.get("/unclassified", response_class=HTMLResponse)
 async def unclassified_list(
-    request: Request,
-    search: str = None,
-    filter_resources: List[str] = Query(default=[]),
-    sort_by: str = "default",
-    page: int = 1,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        search: str = None,
+        filter_resources: List[str] = Query(default=[]),
+        sort_by: str = "default",
+        page: int = 1,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
-    return await _biological_list_impl(request, db, "unclassified", "unclassified", search, filter_resources, sort_by, page)
+    return await _biological_list_impl(request, db, "unclassified", "unclassified", search, filter_resources, sort_by,
+                                       page)
 
 
 @app.get("/biological/new", response_class=HTMLResponse)
@@ -710,7 +893,8 @@ async def biological_new(request: Request, db: AsyncSession = Depends(get_db)):
     baikal_relation_options = await get_property_values(db, BIO_OBJECT_TYPE_ID, CATALOG_BAIKAL_RELATION)
     authors = (await db.execute(select(Author.name).order_by(Author.name))).scalars().all()
     sources = (await db.execute(select(Source.name).order_by(Source.name))).scalars().all()
-    reliability_options = (await db.execute(select(ReliabilityLevel.name).order_by(ReliabilityLevel.name))).scalars().all()
+    reliability_options = (
+        await db.execute(select(ReliabilityLevel.name).order_by(ReliabilityLevel.name))).scalars().all()
 
     return templates.TemplateResponse("biological_form.html", {
         "request": request,
@@ -728,25 +912,25 @@ async def biological_new(request: Request, db: AsyncSession = Depends(get_db)):
 
 @app.post("/biological/save")
 async def biological_save(
-    request: Request,
-    name_ru: str = Form(...),
-    bio_type: str = Form(...),
-    subtypes: str = Form(""),
-    scientific_name: str = Form(""),
-    conservation_status: str = Form(""),
-    region: str = Form(""),
-    baikal_relation: str = Form(""),
-    description: str = Form(""),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        name_ru: str = Form(...),
+        bio_type: str = Form(...),
+        subtypes: str = Form(""),
+        scientific_name: str = Form(""),
+        conservation_status: str = Form(""),
+        region: str = Form(""),
+        baikal_relation: str = Form(""),
+        description: str = Form(""),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
-    
- # 1. Сначала создаём словарь свойств
+
+    # 1. Сначала создаём словарь свойств
     props = _build_bio_object_properties(
         bio_type.strip(),
         _parse_subtypes(subtypes),
@@ -755,10 +939,10 @@ async def biological_save(
         region.strip() or None,
         baikal_relation.strip() or None,
     )
-    
+
     # 2. ДОБАВИТЬ ЭТУ СТРОКУ: жестко фиксируем основное название
     props["Вид (русское название)"] = name_ru.strip()
-    
+
     # 3. Создаём объект с этими свойствами
     obj = Object(
         db_id=f"BIO_OBJ_{secrets.token_hex(6)}",
@@ -767,7 +951,7 @@ async def biological_save(
     )
     db.add(obj)
     await db.flush()
-    
+
     # 4. Создаём синоним и связь (в нижнем регистре, как при импорте)
     syn = ObjectNameSynonym(synonym=name_ru.lower().strip().replace("ё", "е"), language="ru")
     db.add(syn)
@@ -777,7 +961,7 @@ async def biological_save(
         synonym_id=syn.id,
         priority=1  # <-- Основное название всегда имеет приоритет 1
     ))
-    
+
     if description.strip():
         parsed_date = None
         if date.strip():
@@ -806,14 +990,14 @@ async def biological_edit(request: Request, object_id: int, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="Биологический объект не найден")
 
     # Стало (добавляем сортировку по priority):
-        # Получаем синонимы, отсортированные по приоритету
+    # Получаем синонимы, отсортированные по приоритету
     synonyms_result = (await db.execute(
         select(ObjectNameSynonym.synonym)
         .join(object_name_synonym_link, object_name_synonym_link.c.synonym_id == ObjectNameSynonym.id)
         .where(object_name_synonym_link.c.object_id == object_id)
         .order_by(object_name_synonym_link.c.priority.asc(), ObjectNameSynonym.synonym)
     )).scalars().all()
-    
+
     synonyms = list(synonyms_result)
 
     props = obj.object_properties or {}
@@ -858,7 +1042,8 @@ async def biological_edit(request: Request, object_id: int, db: AsyncSession = D
         })
 
     images_q = (
-        select(Resource.id.label("resource_id"), Resource.title, Resource.features, ImageValue.url, ImageValue.file_path)
+        select(Resource.id.label("resource_id"), Resource.title, Resource.features, ImageValue.url,
+               ImageValue.file_path)
         .join(ResourceValue, ResourceValue.resource_id == Resource.id)
         .join(Modality, Modality.id == ResourceValue.modality_id)
         .join(ImageValue, ImageValue.id == ResourceValue.value_id)
@@ -911,7 +1096,7 @@ async def biological_edit(request: Request, object_id: int, db: AsyncSession = D
             "values": list(p.property_values or []),
             "is_multiple": p.is_multiple,
             "json_key": PROP_BIO_TYPE if p.property_name.strip().lower() == CATALOG_BIO_TYPE
-                        else _resolve_json_key(entity["object_properties"], p.property_name),
+            else _resolve_json_key(entity["object_properties"], p.property_name),
         }
         for p in avail_props_rows
     ]
@@ -940,15 +1125,15 @@ async def biological_edit(request: Request, object_id: int, db: AsyncSession = D
 
 @app.post("/biological/{object_id}/add_text")
 async def biological_add_text(
-    request: Request,
-    object_id: int,
-    title: str = Form(...),
-    content: str = Form(...),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        title: str = Form(...),
+        content: str = Form(...),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -970,15 +1155,15 @@ async def biological_add_text(
 
 @app.post("/biological/{object_id}/add_image")
 async def biological_add_image(
-    request: Request,
-    object_id: int,
-    title: str = Form(...),
-    image_url: str = Form(...),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        title: str = Form(...),
+        image_url: str = Form(...),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1001,15 +1186,15 @@ async def biological_add_image(
 
 @app.post("/biological/{object_id}/add_geo")
 async def biological_add_geo(
-    request: Request,
-    object_id: int,
-    title: str = Form(...),
-    geojson: str = Form(...),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        title: str = Form(...),
+        geojson: str = Form(...),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1036,10 +1221,10 @@ async def biological_add_geo(
 
 @app.post("/biological/resource/delete/text/{resource_id}")
 async def delete_biological_text_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1050,10 +1235,10 @@ async def delete_biological_text_resource(
 
 @app.post("/biological/resource/delete/image/{resource_id}")
 async def delete_biological_image_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1064,10 +1249,10 @@ async def delete_biological_image_resource(
 
 @app.post("/biological/resource/delete/geo/{resource_id}")
 async def delete_biological_geo_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1078,14 +1263,14 @@ async def delete_biological_geo_resource(
 
 @app.post("/biological/resource/edit/text/{resource_id}")
 async def edit_biological_text_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    title: str = Form(...),
-    content: str = Form(None),
-    content_key: str = Form(None),
-    structured_json: str = Form(None),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        title: str = Form(...),
+        content: str = Form(None),
+        content_key: str = Form(None),
+        structured_json: str = Form(None),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1104,12 +1289,12 @@ async def edit_biological_text_resource(
 
 @app.post("/biological/resource/edit/image/{resource_id}")
 async def edit_biological_image_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    title: str = Form(...),
-    image_url: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        title: str = Form(...),
+        image_url: str = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1128,12 +1313,12 @@ async def edit_biological_image_resource(
 
 @app.post("/biological/resource/edit/geo/{resource_id}")
 async def edit_biological_geo_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    title: str = Form(...),
-    geojson: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        title: str = Form(...),
+        geojson: str = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1148,7 +1333,8 @@ async def edit_biological_geo_resource(
     rv = (await db.execute(select(ResourceValue).where(ResourceValue.resource_id == resource_id))).scalar()
     if rv:
         await db.execute(
-            sql_text("UPDATE eco_assistant.geodata_value SET geometry = ST_SetSRID(ST_GeomFromGeoJSON(:gj), 4326) WHERE id = :id"),
+            sql_text(
+                "UPDATE eco_assistant.geodata_value SET geometry = ST_SetSRID(ST_GeomFromGeoJSON(:gj), 4326) WHERE id = :id"),
             {"gj": geojson, "id": rv.value_id},
         )
     await db.commit()
@@ -1197,10 +1383,10 @@ async def get_bio_geo_resource_geojson(geodata_id: int, db: AsyncSession = Depen
 
 @app.post("/resource/delete/image/{image_id}")
 async def delete_image_resource(
-    request: Request,
-    image_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db)
+        request: Request,
+        image_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db)
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1223,10 +1409,10 @@ async def delete_image_resource(
 
 @app.post("/resource/delete/text/{text_id}")
 async def delete_text_modality(
-    request: Request,
-    text_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db)
+        request: Request,
+        text_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db)
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1236,6 +1422,7 @@ async def delete_text_modality(
     await db.execute(delete(TextContent).where(TextContent.id == text_id))
     await db.commit()
     return RedirectResponse(url=f"/biological/{entity_id}", status_code=303)
+
 
 # ==========================================
 # HELPERS: работа со схемой eco_assistant
@@ -1284,7 +1471,7 @@ def _normalize_subtypes(object_properties: dict | None) -> list:
 
 
 async def get_property_counts(db: AsyncSession, object_type_id: int, property_name: str,
-                               json_key: str | None = None) -> list[tuple[str, int]]:
+                              json_key: str | None = None) -> list[tuple[str, int]]:
     """
     Для справочника (object_type_id, property_name) вернуть список (value, count),
     где count — реальное количество объектов, у которых это значение встречается в
@@ -1323,7 +1510,8 @@ async def get_modality_id(db: AsyncSession, modality_type: str) -> int:
     q = select(Modality.id).where(Modality.modality_type == modality_type)
     row = (await db.execute(q)).scalar()
     if row is None:
-        raise HTTPException(status_code=500, detail=f"Модальность '{modality_type}' не зарегистрирована в eco_assistant.modality")
+        raise HTTPException(status_code=500,
+                            detail=f"Модальность '{modality_type}' не зарегистрирована в eco_assistant.modality")
     return row
 
 
@@ -1390,10 +1578,10 @@ def _build_object_properties(subtypes: list[str], region: str | None,
 
 
 async def _create_resource_scaffold(db: AsyncSession, *, title: str, author_name: str,
-                                     source_name: str, reliability_name: str,
-                                     date_value, creation_tool: str = "Admin Panel",
-                                     creation_type: str = "ручной ввод",
-                                     features: dict | None = None) -> Resource:
+                                    source_name: str, reliability_name: str,
+                                    date_value, creation_tool: str = "Admin Panel",
+                                    creation_type: str = "ручной ввод",
+                                    features: dict | None = None) -> Resource:
     """
     Создать полноценный каркас ресурса: справочники автора/источника/достоверности,
     запись о создании, библиографию, статические и сопровождающие метаданные, сам Resource.
@@ -1449,7 +1637,7 @@ def _text_value_display(sd: dict) -> dict:
 
 
 def _apply_text_value_edit(tv: "TextValue", content: str | None, content_key: str | None,
-                            structured_json: str | None) -> None:
+                           structured_json: str | None) -> None:
     """
     Применяет правки из формы редактирования текстового ресурса к TextValue.
     Если пришёл structured_json - сохраняет разобранный JSON как есть (используется
@@ -1471,7 +1659,7 @@ def _apply_text_value_edit(tv: "TextValue", content: str | None, content_key: st
 
 
 async def _attach_text_to_object(db: AsyncSession, object_id: int, resource: Resource,
-                                  structured_data: dict, relation_type: str = "описание объекта"):
+                                 structured_data: dict, relation_type: str = "описание объекта"):
     """Создать TextValue + ResourceValue + resource_object-линк для существующего Resource и Object."""
     tv = TextValue(structured_data=structured_data)
     db.add(tv)
@@ -1489,8 +1677,8 @@ async def _attach_text_to_object(db: AsyncSession, object_id: int, resource: Res
 
 
 async def _attach_image_to_object(db: AsyncSession, object_id: int, resource: Resource,
-                                   url: str, file_path: str | None, fmt: str | None,
-                                   relation_type: str = "изображение объекта"):
+                                  url: str, file_path: str | None, fmt: str | None,
+                                  relation_type: str = "изображение объекта"):
     iv = ImageValue(url=url or None, file_path=file_path or None, format=fmt or None)
     db.add(iv)
     await db.flush()
@@ -1507,7 +1695,7 @@ async def _attach_image_to_object(db: AsyncSession, object_id: int, resource: Re
 
 
 async def _attach_geodata_to_object(db: AsyncSession, object_id: int, resource: Resource,
-                                     geojson: dict | str, relation_type: str = "геометрия объекта"):
+                                    geojson: dict | str, relation_type: str = "геометрия объекта"):
     """Создать GeodataValue из GeoJSON + ResourceValue + resource_object-линк."""
     geojson_str = geojson if isinstance(geojson, str) else json.dumps(geojson)
     geom_q = select(func.ST_SetSRID(func.ST_GeomFromGeoJSON(geojson_str), 4326))
@@ -1538,7 +1726,7 @@ def _primary_synonym(synonyms: list[str], object_properties: dict | None = None)
                 # Проверяем, что это кириллица
                 if any('\u0400' <= c <= '\u04FF' for c in val):
                     return val
-    
+
     # Ищем кириллическое название среди синонимов
     if synonyms:
         for syn in synonyms:
@@ -1546,13 +1734,13 @@ def _primary_synonym(synonyms: list[str], object_properties: dict | None = None)
                 return syn
         # Если кириллицы нет, берём первый синоним
         return synonyms[0]
-    
+
     return "Без названия"
 
 
 def _build_bio_object_properties(type_: str, subtypes: list[str], scientific_name: str | None,
-                                  conservation_status: str | None, region: str | None,
-                                  baikal_relation: str | None) -> dict:
+                                 conservation_status: str | None, region: str | None,
+                                 baikal_relation: str | None) -> dict:
     """Собрать словарь object.object_properties для биологического объекта.
 
     subtypes/region/baikal_relation - кириллица (PROP_*), как у db_importer/
@@ -1588,13 +1776,13 @@ async def _ensure_bio_object_exists(db: AsyncSession, object_id: int):
 
 @app.get("/geographical", response_class=HTMLResponse)
 async def geographical_list(
-    request: Request,
-    search: str = None,
-    filter_subtype: List[str] = Query(default=[]),
-    filter_resources: List[str] = Query(default=[]),
-    sort_by: str = "default",
-    page: int = 1,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        search: str = None,
+        filter_subtype: List[str] = Query(default=[]),
+        filter_resources: List[str] = Query(default=[]),
+        sort_by: str = "default",
+        page: int = 1,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -1646,12 +1834,12 @@ async def geographical_list(
     """), {"otid": GEO_OBJECT_TYPE_ID})
     sr = stats_raw.first()
     stats = {
-        "total":        int(sr.total),
-        "has_text":     int(sr.has_text),
-        "has_image":    int(sr.has_image),
-        "has_geo":      int(sr.has_geo),
+        "total": int(sr.total),
+        "has_text": int(sr.has_text),
+        "has_image": int(sr.has_image),
+        "has_geo": int(sr.has_geo),
         "no_resources": int(sr.no_resources),
-        "has_links":    int(sr.has_links),
+        "has_links": int(sr.has_links),
     }
 
     # 3. Подзапрос ресурсов (отдельно для использования в сортировке и выборке)
@@ -1748,7 +1936,7 @@ async def geographical_list(
 
     entities = []
     for row in rows:
-        synonyms =[s for s in (row.synonyms or []) if s]
+        synonyms = [s for s in (row.synonyms or []) if s]
         props = row.object_properties or {}
         c = resource_counts.get(row.id, {"text": 0, "image": 0, "geo": 0})
         entities.append({
@@ -1800,7 +1988,8 @@ async def geographical_new(request: Request, db: AsyncSession = Depends(get_db))
 
     authors = (await db.execute(select(Author.name).order_by(Author.name))).scalars().all()
     sources = (await db.execute(select(Source.name).order_by(Source.name))).scalars().all()
-    reliability_options = (await db.execute(select(ReliabilityLevel.name).order_by(ReliabilityLevel.name))).scalars().all()
+    reliability_options = (
+        await db.execute(select(ReliabilityLevel.name).order_by(ReliabilityLevel.name))).scalars().all()
 
     return templates.TemplateResponse("geographical_form.html", {
         "request": request,
@@ -1819,18 +2008,18 @@ async def geographical_new(request: Request, db: AsyncSession = Depends(get_db))
 
 @app.post("/geographical/save")
 async def geographical_save(
-    request: Request,
-    name_ru: str = Form(...),
-    subtypes: str = Form(""),
-    region: str = Form(""),
-    exact_location: str = Form(""),
-    baikal_relation: str = Form(""),
-    description: str = Form(""),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        name_ru: str = Form(...),
+        subtypes: str = Form(""),
+        region: str = Form(""),
+        exact_location: str = Form(""),
+        baikal_relation: str = Form(""),
+        description: str = Form(""),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     """Создать новую достопримечательность в eco_assistant.object + связанный ресурс-описание."""
     if not request.session.get("user_id"):
@@ -1903,7 +2092,7 @@ async def geographical_edit(request: Request, object_id: int, db: AsyncSession =
         .where(object_name_synonym_link.c.object_id == object_id)
         .order_by(object_name_synonym_link.c.priority.asc(), ObjectNameSynonym.synonym)
     )).scalars().all()
-    
+
     synonyms = list(synonyms_result)
 
     # Исключаем основное название из списка синонимов (регистронезависимое сравнение)
@@ -2048,15 +2237,15 @@ async def geographical_edit(request: Request, object_id: int, db: AsyncSession =
 
 @app.post("/geographical/{object_id}/add_text")
 async def geographical_add_text(
-    request: Request,
-    object_id: int,
-    title: str = Form(...),
-    content: str = Form(...),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        title: str = Form(...),
+        content: str = Form(...),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     """Добавление текстового ресурса к достопримечательности."""
     if not request.session.get("user_id"):
@@ -2089,15 +2278,15 @@ async def geographical_add_text(
 
 @app.post("/geographical/{object_id}/add_image")
 async def geographical_add_image(
-    request: Request,
-    object_id: int,
-    title: str = Form(...),
-    image_url: str = Form(...),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        title: str = Form(...),
+        image_url: str = Form(...),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     """Добавление изображения к достопримечательности."""
     if not request.session.get("user_id"):
@@ -2131,15 +2320,15 @@ async def geographical_add_image(
 
 @app.post("/geographical/{object_id}/add_geo")
 async def geographical_add_geo(
-    request: Request,
-    object_id: int,
-    title: str = Form(...),
-    geojson: str = Form(...),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        title: str = Form(...),
+        geojson: str = Form(...),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     """Добавление геоданных (GeoJSON) к достопримечательности."""
     if not request.session.get("user_id"):
@@ -2214,10 +2403,10 @@ async def _ensure_service_object_exists(db: AsyncSession, object_id: int):
 
 @app.post("/geographical/resource/delete/text/{resource_id}")
 async def delete_geographical_text_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -2228,10 +2417,10 @@ async def delete_geographical_text_resource(
 
 @app.post("/geographical/resource/delete/image/{resource_id}")
 async def delete_geographical_image_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -2242,10 +2431,10 @@ async def delete_geographical_image_resource(
 
 @app.post("/geographical/resource/delete/geo/{resource_id}")
 async def delete_geographical_geo_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -2325,14 +2514,14 @@ async def get_geo_resource_geojson(geodata_id: int, db: AsyncSession = Depends(g
 
 @app.post("/geographical/resource/edit/text/{resource_id}")
 async def edit_geographical_text_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    title: str = Form(...),
-    content: str = Form(None),
-    content_key: str = Form(None),
-    structured_json: str = Form(None),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        title: str = Form(...),
+        content: str = Form(None),
+        content_key: str = Form(None),
+        structured_json: str = Form(None),
+        db: AsyncSession = Depends(get_db),
 ):
     """Обновить заголовок и содержимое текстового ресурса."""
     if not request.session.get("user_id"):
@@ -2352,12 +2541,12 @@ async def edit_geographical_text_resource(
 
 @app.post("/geographical/resource/edit/image/{resource_id}")
 async def edit_geographical_image_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    title: str = Form(...),
-    image_url: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        title: str = Form(...),
+        image_url: str = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     """Обновить заголовок и URL изображения."""
     if not request.session.get("user_id"):
@@ -2377,12 +2566,12 @@ async def edit_geographical_image_resource(
 
 @app.post("/geographical/resource/edit/geo/{resource_id}")
 async def edit_geographical_geo_resource(
-    request: Request,
-    resource_id: int,
-    entity_id: int = Form(...),
-    title: str = Form(...),
-    geojson: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        entity_id: int = Form(...),
+        title: str = Form(...),
+        geojson: str = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     """Обновить заголовок и геометрию геоданных."""
     if not request.session.get("user_id"):
@@ -2415,13 +2604,13 @@ async def edit_geographical_geo_resource(
 
 @app.get("/service", response_class=HTMLResponse)
 async def service_list(
-    request: Request,
-    search: str = None,
-    filter_subtype: List[str] = Query(default=[]),
-    filter_resources: List[str] = Query(default=[]),
-    sort_by: str = "default",
-    page: int = 1,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        search: str = None,
+        filter_subtype: List[str] = Query(default=[]),
+        filter_resources: List[str] = Query(default=[]),
+        sort_by: str = "default",
+        page: int = 1,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -2471,12 +2660,12 @@ async def service_list(
     """), {"otid": SERVICE_OBJECT_TYPE_ID})
     sr = stats_raw.first()
     stats = {
-        "total":        int(sr.total),
-        "has_text":     int(sr.has_text),
-        "has_image":    int(sr.has_image),
-        "has_geo":      int(sr.has_geo),
+        "total": int(sr.total),
+        "has_text": int(sr.has_text),
+        "has_image": int(sr.has_image),
+        "has_geo": int(sr.has_geo),
         "no_resources": int(sr.no_resources),
-        "has_links":    int(sr.has_links),
+        "has_links": int(sr.has_links),
     }
 
     total_res_sq = (
@@ -2610,7 +2799,8 @@ async def service_new(request: Request, db: AsyncSession = Depends(get_db)):
     baikal_relation_options = await get_property_values(db, SERVICE_OBJECT_TYPE_ID, CATALOG_BAIKAL_RELATION)
     authors = (await db.execute(select(Author.name).order_by(Author.name))).scalars().all()
     sources = (await db.execute(select(Source.name).order_by(Source.name))).scalars().all()
-    reliability_options = (await db.execute(select(ReliabilityLevel.name).order_by(ReliabilityLevel.name))).scalars().all()
+    reliability_options = (
+        await db.execute(select(ReliabilityLevel.name).order_by(ReliabilityLevel.name))).scalars().all()
     return templates.TemplateResponse("service_form.html", {
         "request": request,
         "active_page": "service",
@@ -2628,22 +2818,22 @@ async def service_new(request: Request, db: AsyncSession = Depends(get_db)):
 
 @app.post("/service/save")
 async def service_save(
-    request: Request,
-    name_ru: str = Form(...),
-    subtypes: str = Form(""),
-    region: str = Form(""),
-    exact_location: str = Form(""),
-    baikal_relation: str = Form(""),
-    description: str = Form(""),
-    author: str = Form(""),
-    source: str = Form(""),
-    date: str = Form(""),
-    reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        name_ru: str = Form(...),
+        subtypes: str = Form(""),
+        region: str = Form(""),
+        exact_location: str = Form(""),
+        baikal_relation: str = Form(""),
+        description: str = Form(""),
+        author: str = Form(""),
+        source: str = Form(""),
+        date: str = Form(""),
+        reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
-    
+
     # 1. Собираем properties и жёстко фиксируем основное название
     props = _build_object_properties(
         _parse_subtypes(subtypes),
@@ -2652,7 +2842,7 @@ async def service_save(
         baikal_relation.strip() or None,
     )
     props["Название услуги"] = name_ru.strip()
-    
+
     obj = Object(
         db_id=f"SVC_OBJ_{secrets.token_hex(6)}",
         object_type_id=SERVICE_OBJECT_TYPE_ID,
@@ -2660,7 +2850,7 @@ async def service_save(
     )
     db.add(obj)
     await db.flush()
-    
+
     # 2. Синоним-имя + link (основное название всегда priority=1, в нижнем регистре)
     syn = ObjectNameSynonym(synonym=name_ru.lower().strip().replace("ё", "е"), language="ru")
     db.add(syn)
@@ -2692,14 +2882,14 @@ async def service_edit(request: Request, object_id: int, db: AsyncSession = Depe
     obj = (await db.execute(select(Object).where(Object.id == object_id))).scalar()
     if not obj or obj.object_type_id != SERVICE_OBJECT_TYPE_ID:
         raise HTTPException(status_code=404, detail="Услуга не найдена")
-       # Получаем синонимы, отсортированные по приоритету
+    # Получаем синонимы, отсортированные по приоритету
     synonyms_result = (await db.execute(
         select(ObjectNameSynonym.synonym)
         .join(object_name_synonym_link, object_name_synonym_link.c.synonym_id == ObjectNameSynonym.id)
         .where(object_name_synonym_link.c.object_id == object_id)
         .order_by(object_name_synonym_link.c.priority.asc(), ObjectNameSynonym.synonym)
     )).scalars().all()
-    
+
     synonyms = list(synonyms_result)
     # Исключаем основное название из списка синонимов (регистронезависимое сравнение)
     main_name = _primary_synonym(list(synonyms), obj.object_properties or {})
@@ -2737,7 +2927,8 @@ async def service_edit(request: Request, object_id: int, db: AsyncSession = Depe
             "feature_data": row.features or {},
         })
     images_q = (
-        select(Resource.id.label("resource_id"), Resource.title, Resource.features, ImageValue.url, ImageValue.file_path)
+        select(Resource.id.label("resource_id"), Resource.title, Resource.features, ImageValue.url,
+               ImageValue.file_path)
         .join(ResourceValue, ResourceValue.resource_id == Resource.id)
         .join(Modality, Modality.id == ResourceValue.modality_id)
         .join(ImageValue, ImageValue.id == ResourceValue.value_id)
@@ -2777,7 +2968,8 @@ async def service_edit(request: Request, object_id: int, db: AsyncSession = Depe
             "feature_data": row.features or {},
         })
     avail_props_rows = (await db.execute(
-        select(ObjectProperty).where(ObjectProperty.object_type_id == SERVICE_OBJECT_TYPE_ID).order_by(ObjectProperty.property_name)
+        select(ObjectProperty).where(ObjectProperty.object_type_id == SERVICE_OBJECT_TYPE_ID).order_by(
+            ObjectProperty.property_name)
     )).scalars().all()
     available_properties = [
         {
@@ -2813,9 +3005,9 @@ async def service_edit(request: Request, object_id: int, db: AsyncSession = Depe
 
 @app.post("/services/auto-annotate-all")
 async def services_auto_annotate_all(
-    request: Request,
-    body: dict = Body(default={}),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        body: dict = Body(default={}),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -2835,9 +3027,9 @@ async def services_auto_annotate_all(
 
 @app.post("/services/save-annotate-links")
 async def services_save_annotate_links(
-    request: Request,
-    body: dict = Body(default={}),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        body: dict = Body(default={}),
+        db: AsyncSession = Depends(get_db),
 ):
     """Сохраняет pre-computed promo-связи из dry-run без повторного анализа текстов."""
     if not request.session.get("user_id"):
@@ -2854,7 +3046,8 @@ async def services_save_annotate_links(
             select(ObjectObjectLink).where(
                 ObjectObjectLink.relation_type == "promo",
             ).where(
-                sql_text("(object_id = :sid AND related_object_id = :oid) OR (object_id = :oid AND related_object_id = :sid)")
+                sql_text(
+                    "(object_id = :sid AND related_object_id = :oid) OR (object_id = :oid AND related_object_id = :sid)")
             ).params(sid=object_id, oid=related_id)
         )).scalar()
         if not existing:
@@ -2926,7 +3119,8 @@ async def _auto_annotate_service(object_id: int, db: AsyncSession, dry_run: bool
                 select(ObjectObjectLink).where(
                     ObjectObjectLink.relation_type == "promo",
                 ).where(
-                    sql_text("(object_id = :sid AND related_object_id = :oid) OR (object_id = :oid AND related_object_id = :sid)")
+                    sql_text(
+                        "(object_id = :sid AND related_object_id = :oid) OR (object_id = :oid AND related_object_id = :sid)")
                 ).params(sid=object_id, oid=row.object_id)
             )).scalar()
             if not existing:
@@ -2945,10 +3139,10 @@ async def _auto_annotate_service(object_id: int, db: AsyncSession, dry_run: bool
 
 @app.post("/service/{object_id}/auto-annotate")
 async def service_auto_annotate(
-    request: Request,
-    object_id: int,
-    body: dict = Body(default={}),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        body: dict = Body(default={}),
+        db: AsyncSession = Depends(get_db),
 ):
     """Ищет упоминания объектов ОФФ/Гео в текстах услуги и создаёт promo-связи."""
     if not request.session.get("user_id"):
@@ -3014,7 +3208,8 @@ async def service_auto_annotate(
                 select(ObjectObjectLink).where(
                     ObjectObjectLink.relation_type == "promo",
                 ).where(
-                    sql_text("(object_id = :sid AND related_object_id = :oid) OR (object_id = :oid AND related_object_id = :sid)")
+                    sql_text(
+                        "(object_id = :sid AND related_object_id = :oid) OR (object_id = :oid AND related_object_id = :sid)")
                 ).params(sid=object_id, oid=row.object_id)
             )).scalar()
             if not existing:
@@ -3033,10 +3228,10 @@ async def service_auto_annotate(
 
 @app.post("/service/{object_id}/add_text")
 async def service_add_text(
-    request: Request, object_id: int,
-    title: str = Form(...), content: str = Form(...),
-    author: str = Form(""), source: str = Form(""), date: str = Form(""), reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request, object_id: int,
+        title: str = Form(...), content: str = Form(...),
+        author: str = Form(""), source: str = Form(""), date: str = Form(""), reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3048,7 +3243,8 @@ async def service_add_text(
         except ValueError:
             parsed_date = None
     res = await _create_resource_scaffold(db, title=title, author_name=author.strip(),
-                                          source_name=source.strip(), reliability_name=reliability.strip(), date_value=parsed_date)
+                                          source_name=source.strip(), reliability_name=reliability.strip(),
+                                          date_value=parsed_date)
     await _attach_text_to_object(db, object_id=object_id, resource=res, structured_data={"description": content})
     await db.commit()
     return RedirectResponse(url=f"/service/{object_id}", status_code=303)
@@ -3056,10 +3252,10 @@ async def service_add_text(
 
 @app.post("/service/{object_id}/add_image")
 async def service_add_image(
-    request: Request, object_id: int,
-    title: str = Form(...), image_url: str = Form(...),
-    author: str = Form(""), source: str = Form(""), date: str = Form(""), reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request, object_id: int,
+        title: str = Form(...), image_url: str = Form(...),
+        author: str = Form(""), source: str = Form(""), date: str = Form(""), reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3072,7 +3268,8 @@ async def service_add_image(
             parsed_date = None
     fmt = image_url.rsplit(".", 1)[-1].lower() if "." in image_url.rsplit("/", 1)[-1] else None
     res = await _create_resource_scaffold(db, title=title, author_name=author.strip(),
-                                          source_name=source.strip(), reliability_name=reliability.strip(), date_value=parsed_date)
+                                          source_name=source.strip(), reliability_name=reliability.strip(),
+                                          date_value=parsed_date)
     await _attach_image_to_object(db, object_id=object_id, resource=res, url=image_url, file_path=None, fmt=fmt)
     await db.commit()
     return RedirectResponse(url=f"/service/{object_id}", status_code=303)
@@ -3080,10 +3277,10 @@ async def service_add_image(
 
 @app.post("/service/{object_id}/add_geo")
 async def service_add_geo(
-    request: Request, object_id: int,
-    title: str = Form(...), geojson: str = Form(...),
-    author: str = Form(""), source: str = Form(""), date: str = Form(""), reliability: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request, object_id: int,
+        title: str = Form(...), geojson: str = Form(...),
+        author: str = Form(""), source: str = Form(""), date: str = Form(""), reliability: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3099,15 +3296,17 @@ async def service_add_geo(
         except ValueError:
             parsed_date = None
     res = await _create_resource_scaffold(db, title=title, author_name=author.strip(),
-                                          source_name=source.strip(), reliability_name=reliability.strip(), date_value=parsed_date)
-    await _attach_geodata_to_object(db, object_id=object_id, resource=res, geojson=parsed_geojson, relation_type="местоположение услуги")
+                                          source_name=source.strip(), reliability_name=reliability.strip(),
+                                          date_value=parsed_date)
+    await _attach_geodata_to_object(db, object_id=object_id, resource=res, geojson=parsed_geojson,
+                                    relation_type="местоположение услуги")
     await db.commit()
     return RedirectResponse(url=f"/service/{object_id}", status_code=303)
 
 
 @app.post("/service/resource/delete/text/{resource_id}")
 async def delete_service_text_resource(
-    request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
+        request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3118,7 +3317,7 @@ async def delete_service_text_resource(
 
 @app.post("/service/resource/delete/image/{resource_id}")
 async def delete_service_image_resource(
-    request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
+        request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3129,7 +3328,7 @@ async def delete_service_image_resource(
 
 @app.post("/service/resource/delete/geo/{resource_id}")
 async def delete_service_geo_resource(
-    request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
+        request: Request, resource_id: int, entity_id: int = Form(...), db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3140,10 +3339,10 @@ async def delete_service_geo_resource(
 
 @app.post("/service/resource/edit/text/{resource_id}")
 async def edit_service_text_resource(
-    request: Request, resource_id: int,
-    entity_id: int = Form(...), title: str = Form(...),
-    content: str = Form(None), content_key: str = Form(None), structured_json: str = Form(None),
-    db: AsyncSession = Depends(get_db),
+        request: Request, resource_id: int,
+        entity_id: int = Form(...), title: str = Form(...),
+        content: str = Form(None), content_key: str = Form(None), structured_json: str = Form(None),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3162,9 +3361,9 @@ async def edit_service_text_resource(
 
 @app.post("/service/resource/edit/image/{resource_id}")
 async def edit_service_image_resource(
-    request: Request, resource_id: int,
-    entity_id: int = Form(...), title: str = Form(...), image_url: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request, resource_id: int,
+        entity_id: int = Form(...), title: str = Form(...), image_url: str = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3183,9 +3382,9 @@ async def edit_service_image_resource(
 
 @app.post("/service/resource/edit/geo/{resource_id}")
 async def edit_service_geo_resource(
-    request: Request, resource_id: int,
-    entity_id: int = Form(...), title: str = Form(...), geojson: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request, resource_id: int,
+        entity_id: int = Form(...), title: str = Form(...), geojson: str = Form(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3200,7 +3399,8 @@ async def edit_service_geo_resource(
     rv = (await db.execute(select(ResourceValue).where(ResourceValue.resource_id == resource_id))).scalar()
     if rv:
         await db.execute(
-            sql_text("UPDATE eco_assistant.geodata_value SET geometry = ST_SetSRID(ST_GeomFromGeoJSON(:gj), 4326) WHERE id = :id"),
+            sql_text(
+                "UPDATE eco_assistant.geodata_value SET geometry = ST_SetSRID(ST_GeomFromGeoJSON(:gj), 4326) WHERE id = :id"),
             {"gj": geojson, "id": rv.value_id},
         )
     await db.commit()
@@ -3254,8 +3454,8 @@ async def get_service_geo_resource_geojson(geodata_id: int, db: AsyncSession = D
 async def _load_object_links(db: AsyncSession, object_id: int) -> list:
     """Загрузить все связи объекта (в обоих направлениях) с именами связанных объектов."""
     _section_map = {
-        BIO_OBJECT_TYPE_ID:     "biological",
-        GEO_OBJECT_TYPE_ID:     "geographical",
+        BIO_OBJECT_TYPE_ID: "biological",
+        GEO_OBJECT_TYPE_ID: "geographical",
         SERVICE_OBJECT_TYPE_ID: "service",
     }
 
@@ -3290,8 +3490,8 @@ async def _load_object_links(db: AsyncSession, object_id: int) -> list:
     for nr in names_rows.mappings().all():
         if nr["id"] not in seen:
             names[nr["id"]] = {
-                "name":    nr["synonym"],
-                "type":    nr["type_name"],
+                "name": nr["synonym"],
+                "type": nr["type_name"],
                 "type_id": nr["object_type_id"],
             }
             seen.add(nr["id"])
@@ -3299,23 +3499,22 @@ async def _load_object_links(db: AsyncSession, object_id: int) -> list:
     seen_links: set[tuple] = set()
     links = []
     for r in raw:
-        lid  = r["linked_id"]
+        lid = r["linked_id"]
         key = (lid, r["relation_type"])
         if key in seen_links:
             continue
         seen_links.add(key)
         info = names.get(lid, {})
         links.append({
-            "related_id":     lid,
-            "name":           info.get("name", f"Объект #{lid}"),
-            "object_type":    info.get("type", ""),
+            "related_id": lid,
+            "name": info.get("name", f"Объект #{lid}"),
+            "object_type": info.get("type", ""),
             "object_section": _section_map.get(info.get("type_id"), "biological"),
             "scientific_name": None,
-            "relation_type":  r["relation_type"],
-            "direction":      r["direction"],
+            "relation_type": r["relation_type"],
+            "direction": r["direction"],
         })
     return links
-
 
 
 @app.get("/object/search")
@@ -3377,10 +3576,10 @@ async def object_resource_list(object_id: int, db: AsyncSession = Depends(get_db
 
 @app.post("/object/{object_id}/links/add")
 async def object_link_add(
-    request: Request,
-    object_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -3429,10 +3628,10 @@ async def object_link_add(
 
 @app.post("/object/{object_id}/links/delete")
 async def object_link_delete(
-    request: Request,
-    object_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -3443,8 +3642,10 @@ async def object_link_delete(
     await db.execute(
         delete(ObjectObjectLink).where(
             or_(
-                (ObjectObjectLink.object_id == object_id) & (ObjectObjectLink.related_object_id == related_id) & (ObjectObjectLink.relation_type == relation_type),
-                (ObjectObjectLink.object_id == related_id) & (ObjectObjectLink.related_object_id == object_id) & (ObjectObjectLink.relation_type == relation_type),
+                (ObjectObjectLink.object_id == object_id) & (ObjectObjectLink.related_object_id == related_id) & (
+                            ObjectObjectLink.relation_type == relation_type),
+                (ObjectObjectLink.object_id == related_id) & (ObjectObjectLink.related_object_id == object_id) & (
+                            ObjectObjectLink.relation_type == relation_type),
             )
         )
     )
@@ -3454,10 +3655,10 @@ async def object_link_delete(
 
 @app.post("/object/{object_id}/res-res-links/add")
 async def res_res_link_add(
-    request: Request,
-    object_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -3498,10 +3699,10 @@ async def res_res_link_add(
 
 @app.post("/object/{object_id}/res-res-links/delete")
 async def res_res_link_delete(
-    request: Request,
-    object_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -3527,17 +3728,18 @@ async def res_res_link_delete(
 
 
 @app.get("/testing", response_class=HTMLResponse)
-async def testing_list(request: Request, db: AsyncSession = Depends(get_db), admin_db = Depends(get_admin_db)):
+async def testing_list(request: Request, db: AsyncSession = Depends(get_db), admin_db=Depends(get_admin_db)):
     user_id = request.session.get("user_id")
     if not user_id: return RedirectResponse(url="/login")
-    
+
     # Загружаем ВСЕ объекты для модалки
     res = await db.execute(select(BiologicalEntity).order_by(BiologicalEntity.common_name_ru))
     objects = res.scalars().all()
-    
+
     # История тестов из SQLite
-    my_tests = admin_db.query(TestSession).filter(TestSession.user_id == user_id).order_by(TestSession.created_at.desc()).all()
-    
+    my_tests = admin_db.query(TestSession).filter(TestSession.user_id == user_id).order_by(
+        TestSession.created_at.desc()).all()
+
     bot_online = await hb.is_alive()
     return templates.TemplateResponse("testing.html", {
         "request": request,
@@ -3547,22 +3749,23 @@ async def testing_list(request: Request, db: AsyncSession = Depends(get_db), adm
         "tests": my_tests
     })
 
+
 @app.post("/testing/start")
 async def start_new_test(
-    request: Request, 
-    mode: str = Form(...), 
-    objects: list[str] = Form(None), 
-    admin_db = Depends(get_admin_db)
+        request: Request,
+        mode: str = Form(...),
+        objects: list[str] = Form(None),
+        admin_db=Depends(get_admin_db)
 ):
     user_id = request.session.get("user_id")
     if not user_id: return RedirectResponse(url="/login")
 
     target_url = f"{TEST_API_BASE.strip()}/start"
-    
+
     # 1. Формируем список параметров как список кортежей (для повторяющихся ключей)
     # Это создаст структуру: ?mode=llm&objs=Нерпа&objs=Омуль
     query_params = [("mode", mode)]
-    
+
     if objects:
         for obj_name in objects:
             query_params.append(("objs", obj_name))
@@ -3575,13 +3778,13 @@ async def start_new_test(
             # Отправляем POST, но все данные в params. Тело будет пустым.
             resp = await client.post(
                 target_url,
-                params=query_params, 
+                params=query_params,
                 headers={
                     "Authorization": f"Bearer {TEST_TOKEN.strip()}",
                     "Content-Type": "application/json"
                 }
             )
-            
+
             print(f"<<< ОТВЕТ API: {resp.status_code} | {resp.text}")
 
             if resp.status_code == 200:
@@ -3598,28 +3801,29 @@ async def start_new_test(
                 return RedirectResponse(url="/testing", status_code=303)
             else:
                 return HTMLResponse(
-                    content=f"<h3>Ошибка API ({resp.status_code}):</h3><pre>{resp.text}</pre>", 
+                    content=f"<h3>Ошибка API ({resp.status_code}):</h3><pre>{resp.text}</pre>",
                     status_code=resp.status_code
                 )
-                
+
         except Exception as e:
             return HTMLResponse(content=f"<h3>Ошибка соединения: {str(e)}</h3>", status_code=500)
 
+
 @app.get("/testing/check/{session_id}")
-async def check_test_status(session_id: str, admin_db = Depends(get_admin_db)):
+async def check_test_status(session_id: str, admin_db=Depends(get_admin_db)):
     # 1. Сначала ищем в нашей локальной базе
     test = admin_db.query(TestSession).filter(TestSession.session_id == session_id).first()
-    if not test: 
+    if not test:
         return {"error": "Not found"}
 
     # --- ВОТ ТУТ ДОБАВЛЯЕМ ПРОВЕРКУ ---
     # Если мы уже знаем, что всё готово и отчет скачан - просто возвращаем это
     if test.status == 'completed' and test.results:
         return {
-            "status": test.status, 
-            "progress": 100, 
+            "status": test.status,
+            "progress": 100,
             "stats": test.stats,
-            "local": True # Пометка для отладки, что данные из нашей базы
+            "local": True  # Пометка для отладки, что данные из нашей базы
         }
     # ---------------------------------
 
@@ -3627,7 +3831,7 @@ async def check_test_status(session_id: str, admin_db = Depends(get_admin_db)):
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             s_resp = await client.get(
-                f"{TEST_API_BASE.strip()}/status/{session_id}", 
+                f"{TEST_API_BASE.strip()}/status/{session_id}",
                 headers={"Authorization": f"Bearer {TEST_TOKEN}"}
             )
             if s_resp.status_code == 200:
@@ -3638,7 +3842,7 @@ async def check_test_status(session_id: str, admin_db = Depends(get_admin_db)):
                 if test.status == 'completed' and not test.results:
                     # Скачиваем один раз и сохраняем навсегда
                     r_resp = await client.get(
-                        f"{TEST_API_BASE.strip()}/result/{session_id}/json", 
+                        f"{TEST_API_BASE.strip()}/result/{session_id}/json",
                         headers={"Authorization": f"Bearer {TEST_TOKEN}"}
                     )
                     if r_resp.status_code == 200:
@@ -3649,15 +3853,16 @@ async def check_test_status(session_id: str, admin_db = Depends(get_admin_db)):
                 return {"status": test.status, "progress": test.progress, "stats": test.stats}
         except Exception as e:
             print(f"Ошибка опроса: {e}")
-    
+
     return {"status": test.status, "progress": test.progress}
 
+
 @app.get("/testing/results/{session_id}")
-async def get_test_results_api(session_id: str, admin_db = Depends(get_admin_db)):
+async def get_test_results_api(session_id: str, admin_db=Depends(get_admin_db)):
     test = admin_db.query(TestSession).filter(TestSession.session_id == session_id).first()
     if not test or not test.results:
         raise HTTPException(status_code=404, detail="Результаты не найдены")
-    
+
     return {
         "mode": test.mode,
         "stats": test.stats,
@@ -3690,11 +3895,11 @@ async def properties_list_page(request: Request, db: AsyncSession = Depends(get_
 
 @app.post("/properties/new")
 async def properties_new(
-    request: Request,
-    object_type_id: int = Form(...),
-    property_name: str = Form(...),
-    property_values: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_type_id: int = Form(...),
+        property_name: str = Form(...),
+        property_values: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3712,10 +3917,10 @@ async def properties_new(
 
 @app.post("/properties/{prop_id}/edit")
 async def properties_edit(
-    request: Request,
-    prop_id: int,
-    property_values: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        prop_id: int,
+        property_values: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     """
     Редактирование списка допустимых значений свойства.
@@ -3733,9 +3938,9 @@ async def properties_edit(
 
 @app.post("/properties/{prop_id}/delete")
 async def properties_delete(
-    request: Request,
-    prop_id: int,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        prop_id: int,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3746,10 +3951,10 @@ async def properties_delete(
 
 @app.post("/properties/{prop_id}/update_settings")
 async def properties_update_settings(
-    request: Request,
-    prop_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        prop_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     """
     Обновление настроек свойства (is_multiple).
@@ -3797,11 +4002,11 @@ async def features_list_page(request: Request, db: AsyncSession = Depends(get_db
 
 @app.post("/features/new")
 async def features_new(
-    request: Request,
-    modality_id: int = Form(...),
-    feature_name: str = Form(...),
-    feature_values: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        modality_id: int = Form(...),
+        feature_name: str = Form(...),
+        feature_values: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3818,10 +4023,10 @@ async def features_new(
 
 @app.post("/features/{feat_id}/edit")
 async def features_edit(
-    request: Request,
-    feat_id: int,
-    feature_values: str = Form(""),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        feat_id: int,
+        feature_values: str = Form(""),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3835,9 +4040,9 @@ async def features_edit(
 
 @app.post("/features/{feat_id}/delete")
 async def features_delete(
-    request: Request,
-    feat_id: int,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        feat_id: int,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return RedirectResponse(url="/login")
@@ -3852,10 +4057,10 @@ async def features_delete(
 
 @app.post("/biological/{object_id}/set_property")
 async def biological_set_property(
-    request: Request,
-    object_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -3903,10 +4108,10 @@ async def biological_set_property(
 
 @app.post("/geographical/{object_id}/set_property")
 async def geographical_set_property(
-    request: Request,
-    object_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -3954,10 +4159,10 @@ async def geographical_set_property(
 
 @app.post("/service/{object_id}/set_property")
 async def service_set_property(
-    request: Request,
-    object_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -4009,10 +4214,10 @@ async def service_set_property(
 
 @app.post("/resource/{resource_id}/update_features")
 async def resource_update_features(
-    request: Request,
-    resource_id: int,
-    data: dict = Body(...),
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        resource_id: int,
+        data: dict = Body(...),
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -4023,6 +4228,101 @@ async def resource_update_features(
     res.features = new_features
     await db.commit()
     return {"ok": True}
+
+
+# ==========================================
+# CMS: АННОТАТОР ИЗОБРАЖЕНИЙ (прокси к сервису annotator)
+# ==========================================
+# Браузер ходит только в админку (сессия + права), админка — в сервис annotator
+# внутри docker-сети. Сам сервис наружу через nginx не публикуется.
+
+ANNOTATOR_URL = os.getenv("ANNOTATOR_URL", "http://annotator:8010").rstrip("/")
+ANNOTATOR_TOKEN = os.getenv("ANNOTATOR_TOKEN", "")
+_TASK_ID_RE = re.compile(r"^[0-9a-f-]{36}$")
+
+
+async def _annotator_call(method: str, path: str, **kwargs):
+    """Запрос к аннотатору. Возвращает (json, None) или (None, текст ошибки)."""
+    headers = {"X-API-Token": ANNOTATOR_TOKEN} if ANNOTATOR_TOKEN else {}
+    try:
+        async with httpx.AsyncClient(base_url=ANNOTATOR_URL, timeout=15.0) as client:
+            resp = await client.request(method, path, headers=headers, **kwargs)
+    except httpx.HTTPError as exc:
+        return None, f"Сервис аннотации недоступен: {exc.__class__.__name__}"
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:
+            detail = resp.text[:300]
+        return None, str(detail or f"HTTP {resp.status_code}")
+    return resp.json(), None
+
+
+@app.get("/annotator/config")
+async def annotator_config(request: Request, lifeform: str = Query(None)):
+    """Признаки и модели, доступные в аннотаторе, — для формы запуска."""
+    if not request.session.get("user_id"):
+        return {"ok": False, "error": "unauthorized"}
+    params = {"lifeform": lifeform} if lifeform else None
+    features, err = await _annotator_call("GET", "/features", params=params)
+    if err:
+        return {"ok": False, "error": err}
+    executors, err = await _annotator_call("GET", "/executors")
+    if err:
+        return {"ok": False, "error": err}
+    return {"ok": True, "features": features, "executors": executors}
+
+
+@app.post("/annotator/start/{resource_id}")
+async def annotator_start(
+        request: Request,
+        resource_id: int,
+        body: dict = Body(default={}),
+        db: AsyncSession = Depends(get_db),
+):
+    """Ставит фото ресурса в очередь аннотатора. Ответ сразу, с task_id."""
+    if not request.session.get("user_id"):
+        return {"ok": False, "error": "unauthorized"}
+    row = (await db.execute(
+        select(ImageValue.url, ImageValue.file_path)
+        .join(ResourceValue, ResourceValue.value_id == ImageValue.id)
+        .join(Modality, Modality.id == ResourceValue.modality_id)
+        .where(ResourceValue.resource_id == resource_id)
+        .where(Modality.modality_type == "Изображение")
+    )).first()
+    image_url = (row.url or row.file_path) if row else None
+    if not image_url:
+        return {"ok": False, "error": "У ресурса нет изображения"}
+
+    payload = {
+        "image_url": image_url,
+        "resource_id": resource_id,
+        "features": body.get("features") or None,
+        "executors": body.get("executors") or None,
+        "lifeform": body.get("lifeform") or None,
+    }
+    task, err = await _annotator_call("POST", "/annotate", json=payload)
+    if err:
+        return {"ok": False, "error": err}
+    return {"ok": True, "task": task}
+
+
+@app.get("/annotator/tasks/{task_id}")
+async def annotator_task(request: Request, task_id: str):
+    """Статус задачи; когда готово — сразу с результатом (браузеру один запрос на опрос)."""
+    if not request.session.get("user_id"):
+        return {"ok": False, "error": "unauthorized"}
+    if not _TASK_ID_RE.match(task_id):
+        return {"ok": False, "error": "некорректный task_id"}
+    task, err = await _annotator_call("GET", f"/tasks/{task_id}")
+    if err:
+        return {"ok": False, "error": err}
+    if task.get("status") == "completed":
+        result, err = await _annotator_call("GET", f"/tasks/{task_id}/result")
+        if err:
+            return {"ok": False, "error": err}
+        task["result"] = result
+    return {"ok": True, "task": task}
 
 
 # ==========================================
@@ -4115,10 +4415,12 @@ async def res_obj_type_delete(request: Request, type_id: int, db: AsyncSession =
     await db.commit()
     return RedirectResponse(url="/link-types", status_code=303)
 
+
 # ==========================================
 # CMS: УПРАВЛЕНИЕ СИНОНИМАМИ ОБЪЕКТА
 # ==========================================
 from pydantic import BaseModel
+
 
 class SynonymsUpdateRequest(BaseModel):
     synonyms: list[str]
@@ -4130,14 +4432,14 @@ def _normalize_synonym(text: str) -> str:
 
 
 async def _update_synonyms_impl(
-    db: AsyncSession,
-    object_id: int,
-    data: SynonymsUpdateRequest,
-    object_type_id: int,
-    main_name_prop_key: str,
+        db: AsyncSession,
+        object_id: int,
+        data: SynonymsUpdateRequest,
+        object_type_id: int,
+        main_name_prop_key: str,
 ) -> dict:
     """Общая логика обновления синонимов для всех типов объектов.
-    
+
     Все синонимы хранятся в нижнем регистре (как при импорте через db_importer),
     чтобы поиск через ILIKE / LOWER() работал единообразно.
     """
@@ -4216,7 +4518,7 @@ async def _update_synonyms_impl(
     for priority, syn_norm in enumerate(desired_norm, start=1):
         existing_syn = (await db.execute(
             select(ObjectNameSynonym).where(ObjectNameSynonym.synonym == syn_norm)
-        )).scalar_one_or_none()
+        )).scalars().first()
 
         if not existing_syn:
             existing_syn = ObjectNameSynonym(synonym=syn_norm, language="ru")
@@ -4252,10 +4554,10 @@ async def _update_synonyms_impl(
 
 @app.post("/biological/{object_id}/synonyms")
 async def biological_update_synonyms(
-    request: Request,
-    object_id: int,
-    data: SynonymsUpdateRequest,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: SynonymsUpdateRequest,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -4264,10 +4566,10 @@ async def biological_update_synonyms(
 
 @app.post("/geographical/{object_id}/synonyms")
 async def geographical_update_synonyms(
-    request: Request,
-    object_id: int,
-    data: SynonymsUpdateRequest,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: SynonymsUpdateRequest,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}
@@ -4276,10 +4578,10 @@ async def geographical_update_synonyms(
 
 @app.post("/service/{object_id}/synonyms")
 async def service_update_synonyms(
-    request: Request,
-    object_id: int,
-    data: SynonymsUpdateRequest,
-    db: AsyncSession = Depends(get_db),
+        request: Request,
+        object_id: int,
+        data: SynonymsUpdateRequest,
+        db: AsyncSession = Depends(get_db),
 ):
     if not request.session.get("user_id"):
         return {"ok": False, "error": "unauthorized"}

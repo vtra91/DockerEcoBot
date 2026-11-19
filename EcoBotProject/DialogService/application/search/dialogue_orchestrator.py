@@ -10,9 +10,6 @@ from application.search.context_manager import ConversationHistory, DialogueTurn
 from application.search.continuation import ContinuationCursor, ContinuationStore
 from application.search.slot_classifier import SlotClassifier, _determine_template, _detect_ambiguity
 from application.search.slot_search_executor import (
-    IMAGE_PAGE_SIZE,
-    OBJECT_PAGE_SIZE,
-    TEXT_PAGE_SIZE,
     SlotSearchExecutor,
 )
 
@@ -462,7 +459,7 @@ class DialogueOrchestrator:
             query=query,
             slots=slots,
             object_offset=object_offset,
-            object_limit=int(more.get("object_limit") or OBJECT_PAGE_SIZE),
+            object_limit=int(more.get("object_limit")),
             object_has_more=bool(more.get("object_has_more")),
             resource_offset=int(more.get("next_resource_offset") or 0),
             shown=int(more.get("shown") or 0),
@@ -591,7 +588,6 @@ class DialogueOrchestrator:
                 object_offset=object_offset,
                 object_limit=cursor.object_limit,
                 resource_offset=resource_offset,
-                resource_limit=IMAGE_PAGE_SIZE,
                 use_llm_answer=False,
             )
             images = result.get("images") or []
@@ -630,7 +626,6 @@ class DialogueOrchestrator:
                 object_offset=object_offset,
                 object_limit=cursor.object_limit,
                 resource_offset=resource_offset,
-                resource_limit=TEXT_PAGE_SIZE,
                 use_llm_answer=False,
             )
             answer = (result.get("answer") or "").strip()

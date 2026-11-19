@@ -15,6 +15,11 @@ def register_message_handlers(dp: Dispatcher, bot: Bot) -> None:
     @dp.message_created(F.message.body.text)
     async def handle_text(event: MessageCreated) -> None:
         try:
+            attachments = event.message.body.attachments if event.message.body else []
+            if attachments:
+                logger.info("Text with attachments ignored — handled by attachment handler")
+                return
+
             text: str = event.message.body.text
             if not text or text.startswith("/"):
                 return
@@ -34,7 +39,13 @@ def register_message_handlers(dp: Dispatcher, bot: Bot) -> None:
 
             promo_val = await ctx.redis_client.get("settings:promo_enabled")
             promo_enabled = promo_val != "0"
-            result = await ctx.orchestrator.process(text, user_id=str(chat_id), promo_enabled=promo_enabled)
+            multi_act_val = await ctx.redis_client.get("settings:multi_act_dialog")
+            multi_act_enabled = multi_act_val != "0"
+            result = await ctx.orchestrator.process(
+                text, user_id=str(chat_id),
+                promo_enabled=promo_enabled,
+                multi_act_enabled=multi_act_enabled,
+            )
             await render_pipeline_result(bot, chat_id, result, ctx.session)
 
         except Exception as e:

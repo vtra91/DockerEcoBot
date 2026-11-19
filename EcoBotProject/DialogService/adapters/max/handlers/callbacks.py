@@ -16,6 +16,7 @@ _PAYLOAD_QUERIES: dict[str, str] = {
     "photo": "Покажи фото {}",
     "map":   "Где обитает {}",
     "text":  "Расскажи о {}",
+    "plant_more": "Расскажи подробнее про растение {}",
 }
 
 
@@ -99,7 +100,12 @@ def register_callback_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         try:
             promo_val = await ctx.redis_client.get("settings:promo_enabled")
-            result = await ctx.orchestrator.process(query, user_id=user_id, promo_enabled=promo_val != "0")
+            multi_act_val = await ctx.redis_client.get("settings:multi_act_dialog")
+            result = await ctx.orchestrator.process(
+                query, user_id=user_id,
+                promo_enabled=promo_val != "0",
+                multi_act_enabled=multi_act_val != "0",
+            )
             await render_pipeline_result(bot, chat_id, result, ctx.session)
         except Exception as e:
             logger.error(f"Callback pipeline error [{chat_id}]: {e}", exc_info=True)

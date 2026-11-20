@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from fastapi_app.routes import router
+from fastapi_app.routes import all_routers
 
 BASE_PATH = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")
 
@@ -20,7 +20,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+for r in all_routers:
+    app.include_router(r)
 
 
 @app.get("/health")

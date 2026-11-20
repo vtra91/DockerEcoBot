@@ -87,15 +87,15 @@ class PlaceSearchUseCase:
                 for key, val in object_criteria.properties.items():
                     param_name = f"prop_{key.replace(' ', '_').replace('-', '_')}"
                     if isinstance(val, str):
-                        base_conditions.append(f"o.object_properties->>'{key}' = :{param_name}")
+                        base_conditions.append(f"eco_assistant.prop_ci_text(o.object_properties, '{key}') = :{param_name}")
                         params[param_name] = val
                     elif isinstance(val, list):
                         items = "', '".join(val)
-                        base_conditions.append(f"o.object_properties->'{key}' ?| ARRAY['{items}']")
+                        base_conditions.append(f"eco_assistant.prop_ci(o.object_properties, '{key}') ?| ARRAY['{items}']")
         else:
             base_conditions.append(
-                "(o.object_properties->>'Подтип объекта' = ANY(:subtypes) "
-                "OR o.object_properties->'Подтип объекта' ?| :subtypes)"
+                "(eco_assistant.prop_ci_text(o.object_properties, 'Подтип объекта') = ANY(:subtypes) "
+                "OR eco_assistant.prop_ci(o.object_properties, 'Подтип объекта') ?| :subtypes)"
             )
             params['subtypes'] = subtypes
 

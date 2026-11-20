@@ -42,11 +42,17 @@ class SearchService:
         self.llm_service = llm_service
         self.relational_service = None  # Будет инициализирован позже
         self.geo_service = None  # Будет инициализирован позже
-        self.embedding_model = HuggingFaceEmbeddings(
-            model_name=embedding_model_path,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
+        # Модель эмбеддингов нужна только для векторного поиска (FAISS).
+        # Если её нет на сервере (модели не скачаны), сервис стартует без векторного поиска.
+        try:
+            self.embedding_model = HuggingFaceEmbeddings(
+                model_name=embedding_model_path,
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Модель эмбеддингов не загружена ({e}); векторный поиск (FAISS) отключён")
+            self.embedding_model = None
         self.reranker_model_name = "DiTy/cross-encoder-russian-msmarco"
         self.reranker_local_path = str(Path(__file__).parent.parent / "embedding_models" / "rerankers" / "DiTy_cross-encoder-russian-msmarco")
         self.reranker = None

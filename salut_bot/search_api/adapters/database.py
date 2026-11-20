@@ -66,26 +66,26 @@ class PostgresSearchRepository(SearchRepository):
                         if key == 'exact_location' or key == 'Детальное расположение':
                             if isinstance(value, str):
                                 pattern = r'\y' + value.replace(' ', r'[ -]?').replace('-', r'[ -]?') + r'\y'
-                                count_sql += f" AND o.object_properties->>'exact_location' ~* %s"
+                                count_sql += f" AND eco_assistant.prop_ci_text(o.object_properties, 'exact_location') ~* %s"
                                 count_params.append(pattern)
                             elif isinstance(value, list):
                                 conditions = []
                                 for item in value:
                                     pattern = r'\y' + item.replace(' ', r'[ -]?').replace('-', r'[ -]?') + r'\y'
-                                    conditions.append(f"o.object_properties->>'exact_location' ~* %s")
+                                    conditions.append(f"eco_assistant.prop_ci_text(o.object_properties, 'exact_location') ~* %s")
                                     count_params.append(pattern)
                                 count_sql += f" AND ({' OR '.join(conditions)})"
                         elif isinstance(value, str):
-                            count_sql += f" AND o.object_properties->'{key}' @> '\"{value}\"'::jsonb"
+                            count_sql += f" AND eco_assistant.prop_ci(o.object_properties, '{key}') @> '\"{value}\"'::jsonb"
                         elif isinstance(value, list):
                             for item in value:
-                                count_sql += f" AND o.object_properties->'{key}' @> '\"{item}\"'::jsonb"
+                                count_sql += f" AND eco_assistant.prop_ci(o.object_properties, '{key}') @> '\"{item}\"'::jsonb"
                         elif isinstance(value, bool):
-                            count_sql += f" AND (o.object_properties->>'{key}')::boolean = {str(value).lower()}"
+                            count_sql += f" AND (eco_assistant.prop_ci_text(o.object_properties, '{key}'))::boolean = {str(value).lower()}"
                         elif isinstance(value, (int, float)):
-                            count_sql += f" AND (o.object_properties->>'{key}')::numeric = {value}"
+                            count_sql += f" AND (eco_assistant.prop_ci_text(o.object_properties, '{key}'))::numeric = {value}"
                         else:
-                            count_sql += f" AND o.object_properties->>'{key}' = '{str(value)}'"
+                            count_sql += f" AND eco_assistant.prop_ci_text(o.object_properties, '{key}') = '{str(value)}'"
                 
                 cur.execute(count_sql, count_params)
                 total = cur.fetchone()['total']
@@ -123,26 +123,26 @@ class PostgresSearchRepository(SearchRepository):
                         if key == 'exact_location' or key == 'Детальное расположение':
                             if isinstance(value, str):
                                 pattern = r'\y' + value.replace(' ', r'[ -]?').replace('-', r'[ -]?') + r'\y'
-                                sql += f" AND o.object_properties->>'exact_location' ~* %s"
+                                sql += f" AND eco_assistant.prop_ci_text(o.object_properties, 'exact_location') ~* %s"
                                 params.append(pattern)
                             elif isinstance(value, list):
                                 conditions = []
                                 for item in value:
                                     pattern = r'\y' + item.replace(' ', r'[ -]?').replace('-', r'[ -]?') + r'\y'
-                                    conditions.append(f"o.object_properties->>'exact_location' ~* %s")
+                                    conditions.append(f"eco_assistant.prop_ci_text(o.object_properties, 'exact_location') ~* %s")
                                     params.append(pattern)
                                 sql += f" AND ({' OR '.join(conditions)})"
                         elif isinstance(value, str):
-                            sql += f" AND o.object_properties->'{key}' @> '\"{value}\"'::jsonb"
+                            sql += f" AND eco_assistant.prop_ci(o.object_properties, '{key}') @> '\"{value}\"'::jsonb"
                         elif isinstance(value, list):
                             for item in value:
-                                sql += f" AND o.object_properties->'{key}' @> '\"{item}\"'::jsonb"
+                                sql += f" AND eco_assistant.prop_ci(o.object_properties, '{key}') @> '\"{item}\"'::jsonb"
                         elif isinstance(value, bool):
-                            sql += f" AND (o.object_properties->>'{key}')::boolean = {str(value).lower()}"
+                            sql += f" AND (eco_assistant.prop_ci_text(o.object_properties, '{key}'))::boolean = {str(value).lower()}"
                         elif isinstance(value, (int, float)):
-                            sql += f" AND (o.object_properties->>'{key}')::numeric = {value}"
+                            sql += f" AND (eco_assistant.prop_ci_text(o.object_properties, '{key}'))::numeric = {value}"
                         else:
-                            sql += f" AND o.object_properties->>'{key}' = '{str(value)}'"
+                            sql += f" AND eco_assistant.prop_ci_text(o.object_properties, '{key}') = '{str(value)}'"
                 
                 sql += " GROUP BY o.id, ot.name"
                 sql += f" LIMIT {limit} OFFSET {offset}"

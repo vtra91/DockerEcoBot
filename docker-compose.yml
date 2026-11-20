@@ -239,5 +239,23 @@ services:
           memory: 2g
     networks: [ecobot_net]
 
+  # Тесты работоспособности всего стека. В `up -d` не участвует (профиль health).
+  # Запуск: bash scripts/healthcheck.sh   (подробно — tests/health/README.md)
+  health-tests:
+    build: ./tests/health
+    profiles: [health]
+    restart: "no"
+    env_file:
+      - path: ./tests/health/health.env
+        required: false
+    volumes:
+      # Docker API: читать окружение/логи контейнеров и выполнять пробы внутри них
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./tests/health:/tests:ro
+      - ./logs:/reports
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [ecobot_net]
+
 volumes:
   stt_models:

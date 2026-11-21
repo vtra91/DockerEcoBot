@@ -1,9 +1,12 @@
 import os
+import subprocess
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+import sys  
 
 app = FastAPI(title="RAG Orchestrator (Qdrant)")
 
@@ -17,6 +20,13 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 print(f"Загрузка модели: {MODEL_PATH}")
 model = SentenceTransformer(MODEL_PATH)
 print("Модель загружена.")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Подключаемся к Qdrant
 client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
@@ -38,6 +48,23 @@ class SearchRequest(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok", "model": EMBEDDING_MODEL, "db": "qdrant"}
+
+@app.post("/ingest")
+async def ingest_data(full: bool = False):
+    """
+    Запускает индексацию в фоне.
+    Если full=true — пересчитывает ВСЕ объекты.
+    Если full=false — только новые/измененные.
+    """
+    args = ["python", "-u", "/app/ingest_qdrant.py"] 
+    if full:
+        args.append("--full")
+    
+    # Запускаем в отдельном процессе
+    subprocess.Popen(args, stdout=sys.stdout, stderr=sys.stderr)
+    
+    mode = "полная переиндексация" if full else "инкрементальное обновление"
+    return {"status": "started", "message": f"Запущена {mode}"}
 
 @app.post("/search")
 async def search(req: SearchRequest):

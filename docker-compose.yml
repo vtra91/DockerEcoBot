@@ -22,7 +22,11 @@ services:
       - ./db_custom/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks: [ecobot_net]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-eco}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-eco}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -45,6 +49,7 @@ services:
       - ./salut_bot/embedding_models:/app/embedding_models
       - ./salut_bot/knowledge_base_scripts/Vector/faiss_index:/app/knowledge_base_scripts/Vector/faiss_index:ro
       - ./logs:/app/logs
+      - ./shared.env:/app/shared.env:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DB_HOST=db
@@ -95,6 +100,8 @@ services:
     env_file:
       - ./EcoBotProject/DialogService/.env
       - ./shared.env
+    volumes:
+      - ./shared.env:/app/shared.env:ro
     command: python api.py
     environment:
       - PYTHONUNBUFFERED=1
@@ -121,6 +128,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./shared.env:/app/shared.env:ro
     command: python main_max.py
     expose:
       - "8080"

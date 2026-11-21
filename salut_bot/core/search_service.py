@@ -665,6 +665,14 @@ class SearchService:
             self.llm_service = get_llm()   # используем фабрику
         return self.llm_service
 
+    def reload_llm(self) -> None:
+        """ Сбрасывает закэшированный LLM-клиент (вызывается из POST /reload).
+
+        SearchService — синглтон контейнера, llm_service кэшируется на инстансе,
+        поэтому без сброса после обновления env он остался бы на старом провайдере.
+        """
+        self.llm_service = None
+
     def _generate_llm_answer(self, question: str, context: str) -> Dict[str, Any]:
         """
         Генерирует ответ LLM (любой провайдер) на основе вопроса и контекста.

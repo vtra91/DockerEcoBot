@@ -127,6 +127,7 @@ async def render_pipeline_result(
         chat_id=chat_id,
         text=text,
         attachments=[builder.as_markup()] if has_buttons else None,
+        format="markdown",
     )
 
     # ── Промо: связанные услуги/экспозиции ───────────────────────────────────
@@ -142,6 +143,7 @@ async def render_pipeline_result(
                     chat_id=chat_id,
                     text=f"💡 {promo_text}",
                     attachments=[promo_builder.as_markup()] if name else None,
+                    format="markdown",
                 )
             except Exception as e:
                 logger.error(f"Promo send failed: {e}")

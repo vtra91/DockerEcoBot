@@ -194,7 +194,7 @@ services:
     expose:
       - "5050"
     volumes:
-      - ./dsapi/local_models:/app/local_models:ro
+      - ./dsapi/local_models:/app/local_models
       - ./dsapi/doc:/app/doc:ro
       - ./dsapi/prompts_structure:/app/prompts_structure:ro
       - ./dsapi/logs:/app/logs

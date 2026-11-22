@@ -99,13 +99,20 @@
     {
       "id": "network",
       "title": "Сеть",
-      "badge": "backend · admin",
-      "restart_cmd": "docker compose restart backend admin",
+      "badge": "backend · admin · core-api · max",
+      "restart_cmd": "docker compose up -d backend admin core-api max",
       "fields": [
         {
           "key": "PUBLIC_BASE_URL",
           "label": "Публичный URL",
-          "desc": "Домен приложения — используется в ссылках на карты и изображения для пользователей",
+          "desc": "Полный публичный адрес вместе с префиксом (напр. https://cloud-b.istu.edu/ecoassistant) — ссылки на карты, изображения, webhook бота",
+          "type": "text",
+          "reload": "restart"
+        },
+        {
+          "key": "BASE_PATH",
+          "label": "Базовый путь",
+          "desc": "Префикс, под которым приложение опубликовано (напр. /ecoassistant). Пусто — приложение в корне домена",
           "type": "text",
           "reload": "restart"
         },

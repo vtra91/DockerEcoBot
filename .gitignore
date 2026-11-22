@@ -120,3 +120,6 @@ docs/synonyms_interface_report.md
 # WSL / Windows artifacts
 *:Zone.Identifier
 *.Zone.Identifier
+
+# Локальные настройки тестов работоспособности (пароль админки и т.п.)
+tests/health/health.env

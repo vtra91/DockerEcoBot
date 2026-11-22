@@ -39,31 +39,38 @@ async def render_pipeline_result(
     slots: dict = pipeline_result.get("slots") or {}
     more: dict = result.get("more") or {}
 
-    for url in images[:_MAX_IMAGES]:
-        data = await _fetch_image(session, url)
-        if data:
+      # --------------Блок прерывания отправки текстовых сообщений когда есть фото---------------
+    # Если в ответе есть изображение, присылаем только их
+    if images:
+        for url in images[:_MAX_IMAGES]:
+            data = await _fetch_image(session, url)
+            if data:
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        attachments=[InputMediaBuffer(buffer=data, filename="photo.jpg")],
+                    )
+                except Exception as e:
+                    logger.error(f"Image send failed: {e}")
+
+        if more.get("has_more") or (result.get("is_more_page") and more.get("note")):
+            more_builder = InlineKeyboardBuilder()
+            if more.get("has_more"):
+                more_builder.row(CallbackButton(text="Покажи ещё", payload="more:next"))
             try:
                 await bot.send_message(
                     chat_id=chat_id,
-                    attachments=[InputMediaBuffer(buffer=data, filename="photo.jpg")],
+                    text=more.get("note") or "",
+                    attachments=[more_builder.as_markup()] if more.get("has_more") else None,
                 )
             except Exception as e:
-                logger.error(f"Image send failed: {e}")
-    # К изображениям добавляем отдельное сообщение с прогрессом и кнопкой:
-    # "Покажи ещё" не прикрепляем к самой картинке, чтобы не зависеть
-    # от поддержки media + inline-keyboard в одном сообщении MAX.
-    if more.get("has_more") or (result.get("is_more_page") and more.get("note")):
-        more_builder = InlineKeyboardBuilder()
-        if more.get("has_more"):
-            more_builder.row(CallbackButton(text="Покажи ещё", payload="more:next"))
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=more.get("note") or "",
-                attachments=[more_builder.as_markup()] if more.get("has_more") else None,
-            )
-        except Exception as e:
-            logger.error(f"More button send failed: {e}")
+                logger.error(f"More button send failed: {e}")
+
+        return
+
+    builder = InlineKeyboardBuilder()
+    has_buttons = False
+    # ----------------------------------------------------------------------------------
 
     # ── Статическая карта как изображение ────────────────────────────────────
     static_url = map_data.get("static") if isinstance(map_data, dict) else None
@@ -78,8 +85,9 @@ async def render_pipeline_result(
             except Exception as e:
                 logger.error(f"Static map send failed: {e}")
 
-    builder = InlineKeyboardBuilder()
-    has_buttons = False
+    # Перемещено выше
+    # builder = InlineKeyboardBuilder()
+    # has_buttons = False
 
     # ── Интерактивная карта как кнопка ────────────────────────────────────────
     interactive_url = map_data.get("interactive") if isinstance(map_data, dict) else None
@@ -126,8 +134,8 @@ async def render_pipeline_result(
     await bot.send_message(
         chat_id=chat_id,
         text=text,
-        attachments=[builder.as_markup()] if has_buttons else None,
         format="markdown",
+        attachments=[builder.as_markup()] if has_buttons else None,
     )
 
     # ── Промо: связанные услуги/экспозиции ───────────────────────────────────
@@ -142,8 +150,8 @@ async def render_pipeline_result(
                 await bot.send_message(
                     chat_id=chat_id,
                     text=f"💡 {promo_text}",
-                    attachments=[promo_builder.as_markup()] if name else None,
                     format="markdown",
+                    attachments=[promo_builder.as_markup()] if name else None,
                 )
             except Exception as e:
                 logger.error(f"Promo send failed: {e}")

@@ -1,0 +1,1851 @@
+diff --git a/.gitignore b/.gitignore
+index 5d63eab..34fb35e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -114,3 +114,6 @@ CLAUDE.md
+ tasks/
+ /take_screenshot.py
+ plans/
++
++# Локальные настройки тестов работоспособности (пароль админки и т.п.)
++tests/health/health.env
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 3a4f5fc..2def40d 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -239,5 +239,23 @@ services:
+           memory: 2g
+     networks: [ecobot_net]
+ 
++  # Тесты работоспособности всего стека. В `up -d` не участвует (профиль health).
++  # Запуск: bash scripts/healthcheck.sh   (подробно — tests/health/README.md)
++  health-tests:
++    build: ./tests/health
++    profiles: [health]
++    restart: "no"
++    env_file:
++      - path: ./tests/health/health.env
++        required: false
++    volumes:
++      # Docker API: читать окружение/логи контейнеров и выполнять пробы внутри них
++      - /var/run/docker.sock:/var/run/docker.sock
++      - ./tests/health:/tests:ro
++      - ./logs:/reports
++    extra_hosts:
++      - "host.docker.internal:host-gateway"
++    networks: [ecobot_net]
++
+ volumes:
+   stt_models:
+diff --git a/scripts/healthcheck.sh b/scripts/healthcheck.sh
+new file mode 100755
+index 0000000..e39b101
+--- /dev/null
++++ b/scripts/healthcheck.sh
+@@ -0,0 +1,36 @@
++#!/usr/bin/env bash
++# Тесты работоспособности всего стека (tests/health). Код возврата = код pytest.
++#
++#   bash scripts/healthcheck.sh                  # всё
++#   bash scripts/healthcheck.sh -m "not slow"    # быстро: без LLM и распознавания речи
++#   bash scripts/healthcheck.sh -k nginx         # только то, что про nginx
++#   HEALTH_SKIP_PUBLIC=1 bash scripts/healthcheck.sh
++#
++# Отчёт JUnit: logs/health-report.xml
++set -euo pipefail
++
++cd "$(dirname "${BASH_SOURCE[0]}")/.."
++
++DOCKER="docker"
++if ! docker info >/dev/null 2>&1; then
++    DOCKER="sudo docker"
++fi
++
++echo "[health] проверка docker compose config"
++$DOCKER compose config -q
++
++echo "[health] сборка образа тестов"
++$DOCKER compose --profile health build -q health-tests
++
++# Пробрасываем все HEALTH_* из окружения (со значением — sudo окружение не передаёт)
++env_args=()
++while IFS='=' read -r name value; do
++    env_args+=(-e "$name=$value")
++done < <(env | grep '^HEALTH_' || true)
++
++tty_args=()
++[ -t 1 ] || tty_args=(-T)
++
++exec $DOCKER compose --profile health run --rm \
++    ${tty_args[@]+"${tty_args[@]}"} ${env_args[@]+"${env_args[@]}"} \
++    health-tests --junitxml=/reports/health-report.xml "$@"
+diff --git a/tests/health/Dockerfile b/tests/health/Dockerfile
+new file mode 100644
+index 0000000..cf4b7ae
+--- /dev/null
++++ b/tests/health/Dockerfile
+@@ -0,0 +1,13 @@
++# Контейнер с тестами работоспособности. Запуск: bash scripts/healthcheck.sh
++FROM python:3.11-slim
++
++ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
++WORKDIR /tests
++
++COPY requirements.txt .
++RUN pip install --no-cache-dir -r requirements.txt
++
++# Код тестов монтируется томом (правки без пересборки); COPY — на случай запуска без тома
++COPY . .
++
++ENTRYPOINT ["python", "-m", "pytest"]
+diff --git a/tests/health/README.md b/tests/health/README.md
+new file mode 100644
+index 0000000..0a2e6ca
+--- /dev/null
++++ b/tests/health/README.md
+@@ -0,0 +1,49 @@
++# Тесты работоспособности стека
++
++Проверяют уже запущенный стек (`docker compose up -d`): что каждый сервис жив, что связи между
++сервисами есть, что модели/индексы/данные на месте и что наружу торчит только то, что должно.
++
++```bash
++bash scripts/healthcheck.sh                 # всё (~1–5 мин, первый прогон дольше — сборка образа)
++bash scripts/healthcheck.sh -m "not slow"   # быстро: без LLM и whisper
++bash scripts/healthcheck.sh -k database     # выборочно
++bash scripts/healthcheck.sh -x              # остановиться на первой ошибке
++```
++
++Тесты идут в отдельном контейнере `health-tests` (профиль `health`) в сети `ecobot_net`
++и через `/var/run/docker.sock` читают окружение и логи контейнеров и запускают пробы **внутри** сервисов.
++Ничего не меняют: БД открывается только на чтение, POST-запросы — только безопасные.
++
++## Что проверяется
++
++| Файл | Что |
++|---|---|
++| `test_01_containers` | все контейнеры `running`/`healthy`, нет перезапусков по кругу, в логах с момента старта нет Traceback/ImportError/FATAL |
++| `test_02_config` | реальное окружение контейнеров согласовано: параметры БД, `BASE_PATH`, `PUBLIC_BASE_URL`, токены admin↔dsapi↔annotator, нет секретов из `.env.example`, все внутренние URL в env ведут в живые сервисы |
++| `test_03_connectivity` | изнутри каждого сервиса, с его переменными и драйвером: backend/core-api/admin → Postgres (с паролем), → Redis, core-api/max → backend, → LLM (и что нужная модель есть), admin → core-api/stt/dsapi/annotator, dsapi → бот и Ollama |
++| `test_04_artifacts` | embedding-модель, reranker, FAISS-индекс и что его размерность = размерности модели, промпты, модели dsapi/annotator, права на запись в тома |
++| `test_05_database` | расширения postgis/vector/pg_trgm, все таблицы схемы, справочники, объём данных, известные объекты с ресурсами, висячие ссылки, `{{PUBLIC_BASE_URL}}` в путях к фото, геометрии |
++| `test_06_redis` | Redis, ключи настроек админки, подписка max на `config:reload`, heartbeat бота |
++| `test_07_services` | API каждого сервиса напрямую + контракты: всё, что вызывает core-api, есть в backend; токен админки принимает dsapi/annotator |
++| `test_08_nginx` | маршруты docker-nginx (как их присылает cloud-b), webhook MAX, раздача фото из БД и карт, цепочка через nginx хоста и публичный адрес |
++| `test_09_security` | без логина не открываются страницы админки, core-api и `/reload_database`; не пускает admin/admin; нет портов на 0.0.0.0 |
++| `test_10_e2e` | запрос «Расскажи о байкальской нерпе» проходит core-api → LLM → backend → БД и через чат админки |
++
++Маркеры: `slow`, `llm`, `public`, `host`, `security` (`-m "not public and not slow"` и т.п.).
++
++## Настройки (переменные `HEALTH_*` или файл `tests/health/health.env`, он в .gitignore)
++
++| Переменная | По умолчанию | |
++|---|---|---|
++| `HEALTH_ADMIN_PASSWORD` | `ADMIN_PASSWORD` из контейнера admin | если пароль меняли в UI |
++| `HEALTH_SKIP_PUBLIC=1` / `HEALTH_SKIP_HOST=1` | — | не проверять публичный адрес / nginx хоста |
++| `HEALTH_SERVICES` | `redis,db,backend,core-api,max,admin,nginx,dsapi,stt-service` | обязательные сервисы |
++| `HEALTH_OPTIONAL_SERVICES` | `annotator` | проверяются, если запущены |
++| `HEALTH_MIN_OBJECTS` / `HEALTH_MIN_RESOURCES` | `1000` / `1000` | порог «БД наполнена» |
++| `HEALTH_KNOWN_OBJECTS` | `Байкальская нерпа,Байкальский омуль,Листвянка` | должны найтись и иметь ресурсы |
++| `HEALTH_IGNORE_ENV` | — | переменные, которые не проверять (`SALUT_BOT_URL,DSAPI_URL`) |
++| `HEALTH_LOG_IGNORE` | — | регулярка для известного шума в логах |
++| `HEALTH_MAX_RESTARTS` | `0` | допустимое число перезапусков контейнера |
++| `HEALTH_ALLOWED_PUBLIC_PORTS` | — | порты, которые можно публиковать на 0.0.0.0 (локально: `80,8080`) |
++
++Локально (без cloud-b): `HEALTH_SKIP_PUBLIC=1 HEALTH_SKIP_HOST=1 HEALTH_ALLOWED_PUBLIC_PORTS=80,8080,8082,5432`.
+diff --git a/tests/health/conftest.py b/tests/health/conftest.py
+new file mode 100644
+index 0000000..33ff44d
+--- /dev/null
++++ b/tests/health/conftest.py
+@@ -0,0 +1,177 @@
++import os
++
++import pytest
++import requests
++
++from stack import CORE_SERVICES, OPTIONAL_SERVICES, Stack, internal_url, normalize_base_path
++
++TIMEOUT = float(os.getenv("HEALTH_TIMEOUT", "15"))
++SLOW_TIMEOUT = float(os.getenv("HEALTH_SLOW_TIMEOUT", "240"))
++
++
++def pytest_configure(config):
++    for name, text in [
++        ("slow", "долгие проверки (LLM, распознавание речи); пропустить: -m 'not slow'"),
++        ("llm", "нужен работающий LLM (Ollama/GigaChat)"),
++        ("public", "через публичный адрес PUBLIC_BASE_URL (HEALTH_SKIP_PUBLIC=1 — пропустить)"),
++        ("host", "через системный nginx хоста (HEALTH_SKIP_HOST=1 — пропустить)"),
++        ("security", "то, что не должно быть доступно без авторизации"),
++    ]:
++        config.addinivalue_line("markers", "%s: %s" % (name, text))
++
++
++def pytest_collection_modifyitems(config, items):
++    skip_public = os.getenv("HEALTH_SKIP_PUBLIC") == "1"
++    skip_host = os.getenv("HEALTH_SKIP_HOST") == "1"
++    for item in items:
++        if skip_public and "public" in item.keywords:
++            item.add_marker(pytest.mark.skip(reason="HEALTH_SKIP_PUBLIC=1"))
++        if skip_host and "host" in item.keywords:
++            item.add_marker(pytest.mark.skip(reason="HEALTH_SKIP_HOST=1"))
++
++
++@pytest.fixture(scope="session")
++def stack():
++    return Stack()
++
++
++@pytest.fixture(scope="session")
++def require(stack):
++    """require('annotator') — пропустить тест, если необязательный сервис не запущен;
++    для основного сервиса — упасть с понятной причиной."""
++    def _require(service):
++        if stack.is_running(service):
++            return
++        if service in OPTIONAL_SERVICES or service not in CORE_SERVICES:
++            pytest.skip("%s не запущен (сервис под профилем)" % service)
++        pytest.fail("%s не запущен — смотрите test_01_containers и `docker compose logs %s`" % (service, service))
++    return _require
++
++
++@pytest.fixture(scope="session")
++def base_path(stack):
++    return normalize_base_path(stack.env("backend").get("BASE_PATH"))
++
++
++@pytest.fixture(scope="session")
++def public_base_url(stack):
++    url = (os.getenv("HEALTH_PUBLIC_BASE_URL") or stack.env("backend").get("PUBLIC_BASE_URL") or "").rstrip("/")
++    if not url:
++        pytest.skip("PUBLIC_BASE_URL не задан")
++    return url
++
++
++class Http:
++    """requests с базовым адресом и таймаутом по умолчанию, без автопереходов по редиректам."""
++
++    def __init__(self, base):
++        self.base = base.rstrip("/")
++        self.session = requests.Session()
++
++    def request(self, method, path, **kw):
++        kw.setdefault("timeout", TIMEOUT)
++        kw.setdefault("allow_redirects", False)
++        url = path if path.startswith("http") else self.base + path
++        return self.session.request(method, url, **kw)
++
++    def get(self, path, **kw):
++        return self.request("GET", path, **kw)
++
++    def post(self, path, **kw):
++        return self.request("POST", path, **kw)
++
++
++@pytest.fixture(scope="session")
++def http():
++    """http('backend').get('/health')"""
++    cache = {}
++
++    def _http(service_or_url):
++        if service_or_url not in cache:
++            base = service_or_url if "://" in service_or_url else internal_url(service_or_url)
++            cache[service_or_url] = Http(base)
++        return cache[service_or_url]
++    return _http
++
++
++@pytest.fixture(scope="session")
++def db_params(stack):
++    """Параметры БД ровно те, с которыми работает backend (с теми же значениями по умолчанию, что в коде)."""
++    env = stack.env("backend")
++    if not env:
++        pytest.fail("backend не найден — не знаю, к какой БД подключаться")
++    return {
++        "host": env.get("DB_HOST", "db"),
++        "port": int(env.get("DB_PORT", "5432")),
++        "dbname": env.get("DB_NAME", "eco"),
++        "user": env.get("DB_USER", "postgres"),
++        "password": env.get("DB_PASSWORD", ""),
++    }
++
++
++@pytest.fixture(scope="session")
++def db(db_params):
++    import psycopg2
++    try:
++        conn = psycopg2.connect(connect_timeout=int(TIMEOUT), **db_params)
++    except Exception as exc:
++        pytest.fail("Не подключиться к БД с параметрами backend (%s@%s/%s): %s"
++                    % (db_params["user"], db_params["host"], db_params["dbname"], exc))
++    conn.set_session(readonly=True, autocommit=True)
++    yield conn
++    conn.close()
++
++
++@pytest.fixture(scope="session")
++def sql(db):
++    def _sql(query, params=None):
++        with db.cursor() as cur:
++            cur.execute(query, params)
++            return cur.fetchall()
++    return _sql
++
++
++@pytest.fixture(scope="session")
++def redis_env(stack):
++    env = stack.env("backend") or stack.env("admin")
++    return {"host": env.get("REDIS_HOST", "redis"), "port": int(env.get("REDIS_PORT", "6379")),
++            "password": env.get("REDIS_PASSWORD") or None}
++
++
++@pytest.fixture(scope="session")
++def redis_db(redis_env):
++    import redis
++
++    clients = {}
++
++    def _redis(db_index=0):
++        if db_index not in clients:
++            clients[db_index] = redis.Redis(db=db_index, decode_responses=True,
++                                            socket_timeout=TIMEOUT, **redis_env)
++        return clients[db_index]
++    return _redis
++
++
++@pytest.fixture(scope="session")
++def admin_session(stack, http, base_path):
++    """Залогиненная сессия админки. Логин/пароль: HEALTH_ADMIN_USER/HEALTH_ADMIN_PASSWORD,
++    иначе ADMIN_USERNAME/ADMIN_PASSWORD из окружения контейнера admin."""
++    env = stack.env("admin")
++    user = os.getenv("HEALTH_ADMIN_USER") or env.get("ADMIN_USERNAME", "admin")
++    password = os.getenv("HEALTH_ADMIN_PASSWORD") or env.get("ADMIN_PASSWORD")
++    if not password:
++        pytest.skip("Пароль админки неизвестен: задайте HEALTH_ADMIN_PASSWORD")
++    client = http("admin")
++    resp = client.post("/login", data={"username": user, "password": password})
++    cookie_name = "ecoassistant_admin_session"
++    if resp.status_code != 303 or cookie_name not in resp.cookies:
++        pytest.fail("Логин в админку как %r не удался (HTTP %s, Location=%s). Если пароль меняли в UI — "
++                    "передайте его через HEALTH_ADMIN_PASSWORD."
++                    % (user, resp.status_code, resp.headers.get("location")))
++    # Cookie выдана на путь {BASE_PATH}/admin, а мы ходим в admin напрямую по "/",
++    # поэтому передаём её заголовком, а не через cookie-jar.
++    return {"Cookie": "%s=%s" % (cookie_name, resp.cookies[cookie_name])}
++
++
++def fmt_failures(results):
++    return "\n".join("  ✗ %s: %s" % (r["name"], r["detail"]) for r in results if not r["ok"])
+diff --git a/tests/health/probe.py b/tests/health/probe.py
+new file mode 100644
+index 0000000..ee74b17
+--- /dev/null
++++ b/tests/health/probe.py
+@@ -0,0 +1,189 @@
++"""
++Проба, которая выполняется ВНУТРИ контейнера сервиса (docker exec ... python -c <этот файл> <spec>).
++
++Зачем изнутри: так проверяется ровно то, что видит сам сервис — его DNS, его сеть,
++его переменные окружения, его драйверы БД, права его пользователя на тома.
++Проверка «из соседнего контейнера» этого не ловит (например, пароль БД в .env
++админки другой, чем у backend).
++
++Только стандартная библиотека: файл должен работать в любом python-образе (3.8+).
++Строки вида ${VAR} / ${VAR:-default} в спецификации раскрываются из окружения контейнера.
++
++Вывод: одна строка "__PROBE__<json>" со списком результатов
++[{"name": ..., "ok": bool, "skipped": bool, "detail": str}, ...]
++"""
++import json
++import os
++import re
++import socket
++import sys
++import tempfile
++import time
++import urllib.error
++import urllib.parse
++import urllib.request
++
++_VAR = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
++
++
++def expand(value):
++    if not isinstance(value, str):
++        return value
++    return _VAR.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), value)
++
++
++def _tcp(host, port, timeout):
++    started = time.time()
++    with socket.create_connection((host, int(port)), timeout=timeout):
++        pass
++    return "%s:%s открыт (%.0f мс)" % (host, port, (time.time() - started) * 1000)
++
++
++def check_tcp(spec, timeout):
++    return True, _tcp(expand(spec["host"]), expand(spec["port"]), timeout)
++
++
++def check_redis(spec, timeout):
++    host, port = expand(spec["host"]), int(expand(spec["port"]))
++    with socket.create_connection((host, port), timeout=timeout) as sock:
++        password = expand(spec.get("password", ""))
++        if password:
++            sock.sendall(("AUTH %s\r\n" % password).encode())
++            sock.recv(64)
++        sock.sendall(b"PING\r\n")
++        reply = sock.recv(64)
++    if reply.startswith(b"+PONG"):
++        return True, "%s:%s PONG" % (host, port)
++    return False, "%s:%s ответил %r вместо +PONG" % (host, port, reply[:40])
++
++
++def check_pg(spec, timeout):
++    params = {k: expand(spec[k]) for k in ("host", "port", "db", "user", "password")}
++    if not params["password"]:
++        return False, "пароль БД пустой (переменная из спецификации не задана в окружении контейнера)"
++    query = "select current_database(), current_user, version()"
++    errors = []
++    try:
++        import psycopg2  # noqa
++        conn = psycopg2.connect(host=params["host"], port=int(params["port"]), dbname=params["db"],
++                                user=params["user"], password=params["password"],
++                                connect_timeout=int(timeout))
++        try:
++            cur = conn.cursor()
++            cur.execute(query)
++            row = cur.fetchone()
++        finally:
++            conn.close()
++        return True, "psycopg2: db=%s user=%s" % (row[0], row[1])
++    except ImportError:
++        errors.append("psycopg2 нет")
++    except Exception as exc:  # реальная ошибка подключения — дальше не пробуем
++        return False, "psycopg2: %s: %s" % (type(exc).__name__, str(exc).strip())
++    try:
++        import asyncio
++        import asyncpg  # noqa
++
++        async def run():
++            conn = await asyncpg.connect(host=params["host"], port=int(params["port"]), database=params["db"],
++                                         user=params["user"], password=params["password"], timeout=timeout)
++            try:
++                return await conn.fetchrow(query)
++            finally:
++                await conn.close()
++
++        row = asyncio.run(run())
++        return True, "asyncpg: db=%s user=%s" % (row[0], row[1])
++    except ImportError:
++        errors.append("asyncpg нет")
++    except Exception as exc:
++        return False, "asyncpg: %s: %s" % (type(exc).__name__, str(exc).strip())
++    # Драйвера нет — хотя бы порт
++    return True, "драйвера БД нет (%s); %s" % (", ".join(errors), _tcp(params["host"], params["port"], timeout))
++
++
++def check_http(spec, timeout):
++    url = expand(spec["url"])
++    parsed = urllib.parse.urlparse(url)
++    if not parsed.scheme or not parsed.netloc:
++        return False, "адрес %s после подстановки = %r — переменная не задана в окружении контейнера" % (
++            spec["url"], url)
++    headers = {k: expand(v) for k, v in (spec.get("headers") or {}).items()}
++    req = urllib.request.Request(url, method=spec.get("method", "GET"), headers=headers)
++    try:
++        resp = urllib.request.urlopen(req, timeout=timeout)
++        status, body = resp.status, resp.read(1024 * 1024)
++    except urllib.error.HTTPError as exc:
++        status, body = exc.code, exc.read(4096)
++    text = body.decode("utf-8", "replace")
++    expect = spec.get("expect", "any")
++    if expect != "any" and status not in expect:
++        return False, "%s → HTTP %s (ожидали %s): %s" % (url, status, expect, text[:200].strip())
++    must = expand(spec.get("body_contains", ""))
++    if must and must not in text:
++        return False, "%s → HTTP %s, но в ответе нет %r" % (url, status, must)
++    return True, "%s → HTTP %s" % (url, status)
++
++
++def check_path(spec, timeout):
++    path = expand(spec["path"])
++    kind = spec["expect"]
++    if kind == "file":
++        if os.path.isfile(path) and os.path.getsize(path) > 0:
++            return True, "%s (%d байт)" % (path, os.path.getsize(path))
++        return False, "%s: файла нет или он пустой" % path
++    if kind == "dir_nonempty":
++        if not os.path.isdir(path):
++            return False, "%s: каталога нет" % path
++        entries = os.listdir(path)
++        if not entries:
++            return False, "%s: каталог пустой" % path
++        return True, "%s: %d элементов" % (path, len(entries))
++    if kind == "writable":
++        target = path if os.path.isdir(path) else os.path.dirname(path)
++        if not os.path.isdir(target):
++            return False, "%s: каталога нет" % target
++        if os.path.isfile(path):
++            if os.access(path, os.W_OK):
++                return True, "%s доступен на запись (uid=%s)" % (path, os.getuid())
++            return False, "%s: нет прав на запись (uid=%s)" % (path, os.getuid())
++        with tempfile.NamedTemporaryFile(dir=target, prefix=".healthcheck-"):
++            pass
++        return True, "%s доступен на запись (uid=%s)" % (target, os.getuid())
++    return False, "неизвестный тип проверки пути: %s" % kind
++
++
++def check_python(spec, timeout):
++    """Произвольный фрагмент: должен положить в переменную result пару (ok, detail)."""
++    scope = {"expand": expand, "os": os, "json": json}
++    exec(spec["code"], scope)  # noqa: S102 — код наш, из tests/health
++    ok, detail = scope["result"]
++    return bool(ok), str(detail)
++
++
++CHECKS = {"tcp": check_tcp, "redis": check_redis, "pg": check_pg, "http": check_http,
++          "path": check_path, "python": check_python}
++
++
++def main():
++    specs = json.loads(sys.argv[1])
++    results = []
++    for spec in specs:
++        timeout = float(spec.get("timeout", 10))
++        skip_unless = spec.get("skip_unless_env")
++        if skip_unless and not os.environ.get(skip_unless):
++            results.append({"name": spec["name"], "ok": True, "skipped": True,
++                            "detail": "переменная %s не задана — проверка не применима" % skip_unless})
++            continue
++        try:
++            ok, detail = CHECKS[spec["type"]](spec, timeout)
++        except Exception as exc:
++            target = expand(spec.get("url") or spec.get("path") or
++                            ("%s:%s" % (spec.get("host"), spec.get("port")) if spec.get("host") else ""))
++            ok, detail = False, "%s%s: %s" % (target + " → " if target else "", type(exc).__name__,
++                                              str(exc).strip() or repr(exc))
++        results.append({"name": spec["name"], "ok": ok, "skipped": False, "detail": detail})
++    sys.stdout.write("__PROBE__" + json.dumps(results, ensure_ascii=False) + "\n")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/health/pytest.ini b/tests/health/pytest.ini
+new file mode 100644
+index 0000000..f7ec6e3
+--- /dev/null
++++ b/tests/health/pytest.ini
+@@ -0,0 +1,7 @@
++[pytest]
++testpaths = .
++python_files = test_*.py
++# Код смонтирован только на чтение: без кэша pytest и .pyc
++addopts = -ra --tb=short -p no:cacheprovider
++# Кириллица в именах параметров вместо ра…
++disable_test_id_escaping_and_forfeit_all_rights_to_community_support = True
+diff --git a/tests/health/requirements.txt b/tests/health/requirements.txt
+new file mode 100644
+index 0000000..f2e6189
+--- /dev/null
++++ b/tests/health/requirements.txt
+@@ -0,0 +1,5 @@
++pytest==8.3.4
++requests==2.32.3
++psycopg2-binary==2.9.10
++redis==5.2.1
++docker==7.1.0
+diff --git a/tests/health/stack.py b/tests/health/stack.py
+new file mode 100644
+index 0000000..a9a0872
+--- /dev/null
++++ b/tests/health/stack.py
+@@ -0,0 +1,138 @@
++"""Доступ к стеку docker compose из контейнера с тестами (через /var/run/docker.sock)."""
++import json
++import os
++import re
++import socket
++from datetime import datetime, timezone
++from functools import lru_cache
++from pathlib import Path
++
++import docker
++
++PROBE_SRC = (Path(__file__).parent / "probe.py").read_text(encoding="utf-8")
++
++
++def env_list(name, default=""):
++    return [x.strip() for x in os.getenv(name, default).split(",") if x.strip()]
++
++
++# Сервисы, без которых система не работает
++CORE_SERVICES = env_list("HEALTH_SERVICES", "redis,db,backend,core-api,max,admin,nginx,dsapi,stt-service")
++# Сервисы под профилями: проверяются, только если запущены
++OPTIONAL_SERVICES = env_list("HEALTH_OPTIONAL_SERVICES", "annotator")
++
++# Адреса сервисов внутри ecobot_net (порт — тот, что слушает процесс в контейнере)
++INTERNAL_URLS = {
++    "backend": "http://backend:8000",
++    "core-api": "http://core-api:5001",
++    "admin": "http://admin:8000",
++    "dsapi": "http://dsapi:5050",
++    "stt-service": "http://stt-service:8081",
++    "annotator": "http://annotator:8010",
++    "max": "http://max:8080",
++    "nginx": "http://nginx:80",
++}
++
++
++def internal_url(service):
++    override = os.getenv("HEALTH_URL_" + re.sub(r"\W", "_", service).upper())
++    return (override or INTERNAL_URLS[service]).rstrip("/")
++
++
++def normalize_base_path(value):
++    value = (value or "").strip().strip("/")
++    return "/" + value if value else ""
++
++
++def _parse_docker_time(value):
++    # 2026-11-19T10:12:04.123456789Z → datetime (наносекунды python не умеет)
++    m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?", value)
++    frac = (m.group(2) or ".0")[:7]
++    return datetime.strptime(m.group(1) + frac, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
++
++
++class Stack:
++    def __init__(self):
++        self.client = docker.from_env()
++        self.project = self._detect_project()
++
++    def _detect_project(self):
++        explicit = os.getenv("HEALTH_COMPOSE_PROJECT")
++        if explicit:
++            return explicit
++        # Мы сами запущены как `docker compose run health-tests` — берём проект со своей метки
++        try:
++            me = self.client.containers.get(socket.gethostname())
++            return me.labels["com.docker.compose.project"]
++        except Exception:
++            pass
++        projects = {c.labels.get("com.docker.compose.project")
++                    for c in self.client.containers.list(filters={"label": "com.docker.compose.service=backend"})}
++        projects.discard(None)
++        if len(projects) == 1:
++            return projects.pop()
++        raise RuntimeError("Не удалось определить compose-проект, задайте HEALTH_COMPOSE_PROJECT "
++                           "(найдены: %s)" % (sorted(projects) or "ничего"))
++
++    # --- контейнеры -------------------------------------------------------
++    @lru_cache(maxsize=None)
++    def container(self, service):
++        """Контейнер сервиса (предпочтительно запущенный, не одноразовый `run`)."""
++        found = self.client.containers.list(all=True, filters={
++            "label": ["com.docker.compose.project=%s" % self.project,
++                      "com.docker.compose.service=%s" % service]})
++        found = [c for c in found if c.labels.get("com.docker.compose.oneoff", "False") != "True"]
++        if not found:
++            return None
++        found.sort(key=lambda c: c.attrs["Created"], reverse=True)   # самый свежий…
++        found.sort(key=lambda c: c.status != "running")              # …и запущенный — первым
++        return found[0]
++
++    def is_running(self, service):
++        c = self.container(service)
++        return c is not None and c.status == "running"
++
++    def services_running(self):
++        found = self.client.containers.list(filters={"label": "com.docker.compose.project=%s" % self.project})
++        return sorted({c.labels["com.docker.compose.service"] for c in found
++                       if c.labels.get("com.docker.compose.oneoff", "False") != "True"})
++
++    @lru_cache(maxsize=None)
++    def env(self, service):
++        """Итоговое окружение контейнера (env_file + environment), как его видит процесс."""
++        c = self.container(service)
++        if c is None:
++            return {}
++        result = {}
++        for item in c.attrs["Config"].get("Env") or []:
++            key, _, value = item.partition("=")
++            result[key] = value
++        return result
++
++    def started_at(self, service):
++        return _parse_docker_time(self.container(service).attrs["State"]["StartedAt"])
++
++    def logs_since_start(self, service):
++        c = self.container(service)
++        raw = c.logs(since=self.started_at(service), stdout=True, stderr=True)
++        return raw.decode("utf-8", "replace")
++
++    # --- выполнение внутри контейнера ------------------------------------
++    def exec(self, service, cmd, timeout_note=""):
++        c = self.container(service)
++        if c is None or c.status != "running":
++            raise RuntimeError("сервис %s не запущен — exec невозможен" % service)
++        code, out = c.exec_run(cmd, demux=False)
++        return code, (out or b"").decode("utf-8", "replace")
++
++    @lru_cache(maxsize=None)
++    def _probe_cached(self, service, specs_json):
++        code, out = self.exec(service, ["python", "-c", PROBE_SRC, specs_json])
++        for line in out.splitlines():
++            if line.startswith("__PROBE__"):
++                return {r["name"]: r for r in json.loads(line[len("__PROBE__"):])}
++        raise RuntimeError("проба в %s не отработала (exit %s):\n%s" % (service, code, out[-2000:]))
++
++    def probe(self, service, specs):
++        """Прогоняет список проверок одним exec и возвращает {name: result}."""
++        return self._probe_cached(service, json.dumps(specs, ensure_ascii=False, sort_keys=True))
+diff --git a/tests/health/test_01_containers.py b/tests/health/test_01_containers.py
+new file mode 100644
+index 0000000..2a94c14
+--- /dev/null
++++ b/tests/health/test_01_containers.py
+@@ -0,0 +1,81 @@
++"""Уровень 0: контейнеры живы, не перезапускаются по кругу, в логах с момента старта нет падений."""
++import os
++import re
++
++import pytest
++
++from stack import CORE_SERVICES, OPTIONAL_SERVICES
++
++ALL = CORE_SERVICES + [s for s in OPTIONAL_SERVICES if s not in CORE_SERVICES]
++MAX_RESTARTS = int(os.getenv("HEALTH_MAX_RESTARTS", "0"))
++
++# Что считаем признаком поломки в логах (с момента последнего старта контейнера)
++LOG_PATTERNS = [
++    r"Traceback \(most recent call last\)",
++    r"\b(ImportError|ModuleNotFoundError|SyntaxError)\b",
++    r"\bCRITICAL\b",
++    r"Application startup failed",
++    r"Exception in ASGI application",
++    r"\[emerg\]",                                    # nginx
++    r"FATAL: +(password authentication failed|database .* does not exist|role .* does not exist)",  # postgres
++    r"Cannot load valid features from DB",           # core-api тихо отключает валидацию признаков
++]
++LOG_IGNORE = os.getenv("HEALTH_LOG_IGNORE")  # регулярка для известного шума
++
++
++def _state(stack, service):
++    c = stack.container(service)
++    if c is None:
++        if service in OPTIONAL_SERVICES:
++            pytest.skip("%s не создан (профиль не включён)" % service)
++        pytest.fail("Контейнер %s не найден в проекте %s. Запустите: docker compose up -d %s"
++                    % (service, stack.project, service))
++    return c, c.attrs["State"]
++
++
++@pytest.mark.parametrize("service", ALL)
++def test_container_running(stack, service):
++    c, state = _state(stack, service)
++    assert state["Status"] == "running", (
++        "%s: статус %s, exit code %s, ошибка %r. Последние строки лога:\n%s"
++        % (service, state["Status"], state.get("ExitCode"), state.get("Error"),
++           c.logs(tail=30).decode("utf-8", "replace")))
++
++
++@pytest.mark.parametrize("service", ALL)
++def test_container_healthy(stack, service):
++    c, state = _state(stack, service)
++    health = state.get("Health")
++    if not health:
++        pytest.skip("у %s нет healthcheck в compose" % service)
++    last = (health.get("Log") or [{}])[-1]
++    assert health["Status"] == "healthy", (
++        "%s: healthcheck = %s, последний вывод: %s" % (service, health["Status"], (last.get("Output") or "").strip()))
++
++
++@pytest.mark.parametrize("service", ALL)
++def test_no_restart_loop(stack, service):
++    """restart: always маскирует падения: контейнер 'running', но каждые N секунд перезапускается."""
++    c, state = _state(stack, service)
++    restarts = c.attrs.get("RestartCount", 0)
++    assert restarts <= MAX_RESTARTS, (
++        "%s перезапускался %d раз(а) с момента создания — значит, падает. Смотрите "
++        "`docker compose logs --tail=100 %s`" % (service, restarts, service))
++
++
++@pytest.mark.parametrize("service", ALL)
++def test_logs_have_no_errors(stack, service):
++    c, state = _state(stack, service)
++    if state["Status"] != "running":
++        pytest.skip("контейнер не запущен — см. test_container_running")
++    lines = stack.logs_since_start(service).splitlines()
++    hits = []
++    for i, line in enumerate(lines):
++        if LOG_IGNORE and re.search(LOG_IGNORE, line):
++            continue
++        if any(re.search(p, line) for p in LOG_PATTERNS):
++            hits.append("\n".join(lines[max(0, i - 2): i + 4]))
++    assert not hits, (
++        "%s: в логах с момента старта %d подозрительных мест. Первые:\n\n%s\n\n"
++        "(известный шум можно исключить регуляркой HEALTH_LOG_IGNORE)"
++        % (service, len(hits), "\n----\n".join(hits[:3])))
+diff --git a/tests/health/test_02_config.py b/tests/health/test_02_config.py
+new file mode 100644
+index 0000000..b567b54
+--- /dev/null
++++ b/tests/health/test_02_config.py
+@@ -0,0 +1,151 @@
++"""Уровень 1: итоговое окружение контейнеров согласовано между сервисами.
++
++Читаем не .env-файлы, а то, что реально попало в контейнер (env_file + environment),
++поэтому тест ловит и «забыл пересоздать контейнер после правки shared.env».
++"""
++import re
++import socket
++import urllib.parse
++
++import pytest
++
++from stack import OPTIONAL_SERVICES, env_list, normalize_base_path
++
++# Сервисы под профилями: если не запущены, ссылки на них в env не считаем ошибкой
++PROFILE_SERVICES = set(OPTIONAL_SERVICES) | {"annotator", "images-extractor"}
++
++DB_SERVICES = ["backend", "core-api", "admin"]          # сервисы, которые ходят в Postgres
++BASE_PATH_SERVICES = ["backend", "core-api", "max", "admin"]
++
++
++@pytest.mark.parametrize("service", DB_SERVICES)
++def test_db_credentials_match_postgres(stack, require, service):
++    """DB_NAME/DB_USER/DB_PASSWORD сервиса совпадают с тем, чем инициализирован контейнер db.
++
++    Внимание: POSTGRES_* применяются только при ПЕРВОЙ инициализации data/postgres_data.
++    Поэтому реальную авторизацию проверяет test_03 (подключение изнутри сервиса)."""
++    require(service)
++    db = stack.env("db")
++    env = stack.env(service)
++    expected = {"DB_NAME": db.get("POSTGRES_DB", "postgres"),
++                "DB_USER": db.get("POSTGRES_USER", "postgres"),
++                "DB_PASSWORD": db.get("POSTGRES_PASSWORD")}
++    defaults = {"DB_NAME": "eco", "DB_USER": "postgres", "DB_PASSWORD": None}   # как в коде сервисов
++    diff = []
++    for key, want in expected.items():
++        got = env.get(key, defaults[key])
++        if got != want:
++            shown = (lambda v: "***" if v else repr(v)) if key == "DB_PASSWORD" else repr
++            diff.append("%s: у %s %s, у db %s" % (key, service, shown(got), shown(want)))
++    assert not diff, "Параметры БД расходятся:\n  " + "\n  ".join(diff)
++
++
++def test_base_path_consistent(stack):
++    values = {s: stack.env(s).get("BASE_PATH") for s in BASE_PATH_SERVICES if stack.env(s)}
++    missing = [s for s, v in values.items() if v is None]
++    assert not missing, (
++        "BASE_PATH не задан явно в %s. Значения по умолчанию в коде разные ('' и '/ecoassistant' — "
++        "даже внутри AdminPanel/main.py два разных), так что без явного значения ссылки разъедутся. "
++        "Задайте BASE_PATH в shared.env." % missing)
++    normalized = {s: normalize_base_path(v) for s, v in values.items()}
++    assert len(set(normalized.values())) == 1, "BASE_PATH различается: %s" % normalized
++
++
++def test_public_base_url_matches_base_path(stack):
++    env = stack.env("backend")
++    url = env.get("PUBLIC_BASE_URL", "")
++    base = normalize_base_path(env.get("BASE_PATH"))
++    assert url, "PUBLIC_BASE_URL не задан — ссылки на карты/фото в ответах бота будут битые"
++    path = urllib.parse.urlparse(url).path.rstrip("/")
++    assert path == base, "PUBLIC_BASE_URL=%s оканчивается на %r, а BASE_PATH=%r" % (url, path, base)
++
++
++@pytest.mark.parametrize("service", ["core-api", "max"])
++def test_dialogservice_config_imports(stack, require, service):
++    """DialogService/config.py падает при импорте, если нет хоть одной обязательной переменной
++    (get_env_var без default бросает ValueError — в том числе для PLANTNET_API_KEY с default=None)."""
++    require(service)
++    code, out = stack.exec(service, ["python", "-c", "import config"])
++    assert code == 0, "%s: `import config` падает — сервис не стартует или падает на первом запросе:\n%s" % (
++        service, out.strip().splitlines()[-1] if out.strip() else out)
++
++
++def test_max_webhook_settings(stack, require):
++    require("max")
++    env = stack.env("max")
++    assert env.get("MAX_BOT_TOKEN"), "MAX_BOT_TOKEN не задан — бот не стартует"
++    if env.get("MAX_USE_WEBHOOK", "").lower() == "true":
++        url = env.get("MAX_WEBHOOK_URL") or "%s/%s" % (env.get("PUBLIC_BASE_URL", "").rstrip("/"),
++                                                      env.get("MAX_WEBHOOK_PATH", "/").lstrip("/"))
++        assert url.startswith("https://"), (
++            "Webhook MAX = %r, но MAX принимает только https. В main_max.py при не-https адресе подписка "
++            "молча пропускается — бот просто не получает сообщений." % url)
++
++
++SECRET_KEYS = ["DB_PASSWORD", "POSTGRES_PASSWORD", "SESSION_SECRET_KEY", "SECRET_KEY", "ADMIN_PASSWORD",
++               "API_AUTH_TOKEN", "TEST_TOKEN", "ANNOTATOR_TOKEN", "ANNOTATOR_API_TOKEN", "STAND_SECRET_KEY",
++               "MAX_WEBHOOK_SECRET", "MAX_BOT_TOKEN", "BOT_TOKEN"]
++PLACEHOLDER = re.compile(
++    r"^(changeme|change-me|change_me|postgres|admin|password|secret|test)$"
++    r"|your_|replace-with|generate-a-random|same-as-|super-secret|change-me$|changeme$", re.I)
++
++
++def test_no_placeholder_secrets(stack):
++    ignore = set(env_list("HEALTH_IGNORE_ENV"))
++    bad = {}
++    for service in stack.services_running():
++        for key, value in stack.env(service).items():
++            if key in SECRET_KEYS and key not in ignore and value and PLACEHOLDER.search(value):
++                bad.setdefault((key, value), []).append(service)
++    lines = ["%s=%r (в %s)" % (k, v, ", ".join(s)) for (k, v), s in sorted(bad.items())]
++    assert not lines, ("Секреты со значениями из .env.example (сервер виден из сети университета). "
++                       "Если переменная никем не читается — удалите её из env:\n  " + "\n  ".join(lines))
++
++
++def test_admin_tokens_match_peers(stack, require):
++    require("admin")
++    admin = stack.env("admin")
++    problems = []
++    dsapi = stack.env("dsapi")
++    if dsapi and admin.get("TEST_TOKEN") != dsapi.get("API_AUTH_TOKEN"):
++        problems.append("admin TEST_TOKEN ≠ dsapi API_AUTH_TOKEN — тестирование из админки получит 401")
++    if stack.is_running("annotator"):
++        ann = stack.env("annotator").get("ANNOTATOR_API_TOKEN") or ""
++        if ann and admin.get("ANNOTATOR_TOKEN", "") != ann:
++            problems.append("admin ANNOTATOR_TOKEN ≠ annotator ANNOTATOR_API_TOKEN — аннотатор ответит 401")
++    assert not problems, "\n".join(problems)
++
++
++_URL = re.compile(r"^(https?)://([A-Za-z0-9_-]+)(?::(\d+))?(/.*)?$")
++
++
++def test_internal_urls_in_env_point_to_live_services(stack):
++    """Любой http://<имя-без-точки>:порт в окружении любого сервиса должен вести в живой сервис сети.
++
++    Ловит мусор вроде SALUT_BOT_URL=http://salut_bot:5000 или BOT_DOMAIN=http://backend:5555:
++    такие переменные либо сломаны, либо не используются — и то и другое надо убрать."""
++    ignore = set(env_list("HEALTH_IGNORE_ENV"))
++    status = {}                       # (host, port) -> None | текст ошибки
++    bad = {}                          # (key, value) -> [сервисы]
++    for service in stack.services_running():
++        if service == "health-tests":
++            continue
++        for key, value in stack.env(service).items():
++            m = _URL.match(value.strip())
++            if not m or key in ignore:
++                continue
++            scheme, host, port, _ = m.groups()
++            if host == "localhost" or (host in PROFILE_SERVICES and not stack.is_running(host)):
++                continue
++            target = (host, int(port or (443 if scheme == "https" else 80)))
++            if target not in status:
++                try:
++                    socket.create_connection(target, timeout=3).close()
++                    status[target] = None
++                except OSError as exc:
++                    status[target] = "%s: %s" % (exc.__class__.__name__, exc)
++            if status[target]:
++                bad.setdefault((key, value, status[target]), []).append(service)
++    lines = ["%s=%s (в %s) → %s" % (k, v, ", ".join(s), err) for (k, v, err), s in sorted(bad.items())]
++    assert not lines, ("Переменные указывают на несуществующие адреса (исключить: HEALTH_IGNORE_ENV=VAR1,VAR2):\n  "
++                       + "\n  ".join(lines))
+diff --git a/tests/health/test_03_connectivity.py b/tests/health/test_03_connectivity.py
+new file mode 100644
+index 0000000..af40e2c
+--- /dev/null
++++ b/tests/health/test_03_connectivity.py
+@@ -0,0 +1,77 @@
++"""Уровень 2: связи между сервисами — проверяются ИЗНУТРИ каждого сервиса, с его окружением.
++
++Каждая строка матрицы = «сервис X умеет достучаться до Y так, как это делает его код»:
++те же переменные (DB_HOST, ECOBOT_API_BASE_URL, CORE_API_BASE…), тот же драйвер, тот же DNS.
++"""
++import pytest
++
++PG = {"type": "pg", "host": "${DB_HOST:-db}", "port": "${DB_PORT:-5432}", "db": "${DB_NAME:-eco}",
++      "user": "${DB_USER:-postgres}", "password": "${DB_PASSWORD}"}
++REDIS = {"type": "redis", "host": "${REDIS_HOST:-redis}", "port": "${REDIS_PORT:-6379}",
++         "password": "${REDIS_PASSWORD}"}
++# LLM через OpenAI-совместимый API (Ollama): список моделей должен содержать LLM_MODEL.
++# Типичная ловушка: Ollama на хосте слушает 127.0.0.1, и из контейнера host.docker.internal:11434 закрыт.
++LLM = {"type": "http", "url": "${LLM_BASE_URL}/models", "expect": [200], "body_contains": "${LLM_MODEL}",
++       "skip_unless_env": "LLM_BASE_URL", "timeout": 15}
++
++MATRIX = {
++    "backend": [
++        dict(PG, name="postgres"),
++        dict(REDIS, name="redis"),
++    ],
++    "core-api": [
++        dict(PG, name="postgres"),
++        dict(REDIS, name="redis"),
++        {"name": "backend", "type": "http", "url": "${ECOBOT_API_BASE_URL}/health", "expect": [200]},
++        dict(LLM, name="llm"),
++    ],
++    "max": [
++        dict(REDIS, name="redis"),
++        {"name": "backend", "type": "http", "url": "${ECOBOT_API_BASE_URL}/health", "expect": [200]},
++        dict(LLM, name="llm"),
++    ],
++    "admin": [
++        dict(PG, name="postgres"),
++        dict(REDIS, name="redis"),
++        {"name": "core-api", "type": "http", "url": "${CORE_API_BASE:-http://core-api:5001}/openapi.json",
++         "expect": [200]},
++        {"name": "stt-service", "type": "http", "url": "${STT_URL:-http://stt-service:8081}/health",
++         "expect": [200]},
++        # без токена dsapi отвечает 403 — нам важно, что сервис по этому адресу есть
++        {"name": "dsapi", "type": "http", "url": "${TEST_API_BASE}/status/healthcheck", "expect": [401, 403, 404]},
++        # распознавание растений в чате админки (внешний сервис, адрес зашит по умолчанию в main.py)
++        {"name": "plant-api", "type": "http", "url": "${PLANT_API_URL:-http://194.156.118.21:8020/predict}",
++         "expect": "any", "timeout": 8},
++    ],
++    "dsapi": [
++        # dsapi шлёт тестовые вопросы боту: BOT_DOMAIN + /test-api/test_query (bot_client.py)
++        {"name": "bot (BOT_DOMAIN)", "type": "http", "url": "${BOT_DOMAIN}/test-api/test_query",
++         "method": "POST", "headers": {"Content-Type": "application/json"}, "expect": [200, 400, 405, 422]},
++        {"name": "ollama", "type": "http", "url": "${REMOTE_OLLAMA_URL}/api/tags", "expect": [200],
++         "skip_unless_env": "REMOTE_OLLAMA_URL"},
++    ],
++    "annotator": [
++        {"name": "nginx (IMAGE_BASE_URL)", "type": "http", "url": "${IMAGE_BASE_URL:-http://nginx}/health",
++         "expect": "any"},
++    ],
++}
++
++CASES = [(svc, check["name"]) for svc, checks in MATRIX.items() for check in checks]
++
++
++@pytest.mark.parametrize("service,target", CASES, ids=["%s→%s" % c for c in CASES])
++def test_service_reaches_dependency(stack, require, service, target):
++    require(service)
++    results = stack.probe(service, MATRIX[service])
++    r = results[target]
++    if r["skipped"]:
++        pytest.skip(r["detail"])
++    assert r["ok"], "%s не достучался до %s: %s" % (service, target, r["detail"])
++
++
++def test_admin_reaches_annotator(stack, require):
++    require("admin")
++    require("annotator")
++    r = stack.probe("admin", [{"name": "annotator", "type": "http",
++                               "url": "${ANNOTATOR_URL:-http://annotator:8010}/health", "expect": [200]}])["annotator"]
++    assert r["ok"], r["detail"]
+diff --git a/tests/health/test_04_artifacts.py b/tests/health/test_04_artifacts.py
+new file mode 100644
+index 0000000..0fb5480
+--- /dev/null
++++ b/tests/health/test_04_artifacts.py
+@@ -0,0 +1,88 @@
++"""Уровень 3: «всё подтянулось» — модели, индексы, шаблоны и тома на месте и доступны на запись
++тому пользователю, под которым работает процесс в контейнере."""
++import pytest
++
++# FAISS-индекс должен быть построен той же моделью, которой backend кодирует запросы,
++# иначе размерности не совпадут (bge-m3 = 1024, BERTA = 768) и векторный поиск упадёт.
++FAISS_DIM_CODE = r"""
++import glob
++faiss_dir = "/app/knowledge_base_scripts/Vector/faiss_index"
++model_dir = "/app/embedding_models/" + (os.environ.get("EMBEDDING_MODEL") or "bge-m3")
++try:
++    import faiss
++    idx_files = glob.glob(faiss_dir + "/*.faiss")
++    if not idx_files:
++        result = (False, "в %s нет *.faiss" % faiss_dir)
++    else:
++        index = faiss.read_index(idx_files[0])
++        cfg = json.load(open(model_dir + "/config.json"))
++        hidden = cfg.get("hidden_size") or cfg.get("d_model")
++        result = (index.d == hidden,
++                  "индекс %s: dim=%s, %s векторов; модель %s: hidden_size=%s"
++                  % (os.path.basename(idx_files[0]), index.d, index.ntotal, model_dir, hidden))
++except Exception as exc:
++    result = (False, "%s: %s" % (type(exc).__name__, exc))
++"""
++
++CHECKS = {
++    "backend": [
++        {"name": "embedding-модель", "type": "path", "expect": "file",
++         "path": "/app/embedding_models/${EMBEDDING_MODEL:-bge-m3}/config.json"},
++        {"name": "reranker", "type": "path", "expect": "dir_nonempty",
++         "path": "/app/embedding_models/rerankers/DiTy_cross-encoder-russian-msmarco"},
++        {"name": "faiss index.faiss", "type": "path", "expect": "file",
++         "path": "/app/knowledge_base_scripts/Vector/faiss_index/index.faiss"},
++        {"name": "faiss index.pkl", "type": "path", "expect": "file",
++         "path": "/app/knowledge_base_scripts/Vector/faiss_index/index.pkl"},
++        {"name": "faiss размерность = модель", "type": "python", "code": FAISS_DIM_CODE, "timeout": 60},
++        {"name": "maps на запись", "type": "path", "expect": "writable", "path": "${MAPS_DIR:-/app/maps}"},
++        {"name": "logs на запись", "type": "path", "expect": "writable", "path": "/app/logs"},
++    ],
++    "core-api": [
++        {"name": "промпт классификации", "type": "path", "expect": "file",
++         "path": "/app/prompts/classification_prompt.txt"},
++    ],
++    "max": [
++        {"name": "data на запись", "type": "path", "expect": "writable", "path": "/app/data"},
++        {"name": "user_settings на запись", "type": "path", "expect": "writable",
++         "path": "${USER_SETTINGS_PATH:-/app/data/user_settings.json}"},
++        {"name": "logs на запись", "type": "path", "expect": "writable", "path": "/app/logs"},
++    ],
++    "admin": [
++        {"name": "admin_db на запись", "type": "path", "expect": "writable", "path": "/app/admin_db"},
++        {"name": "shared.env примонтирован", "type": "path", "expect": "file", "path": "/app/shared.env"},
++        {"name": "shared.env на запись", "type": "path", "expect": "writable", "path": "/app/shared.env"},
++        {"name": "шаблоны", "type": "path", "expect": "dir_nonempty", "path": "/app/templates"},
++    ],
++    "dsapi": [
++        {"name": "локальные модели", "type": "path", "expect": "dir_nonempty",
++         "path": "${PATH_LOCAL_MODELS:-/app/local_models}"},
++        {"name": "шаблоны вопросов", "type": "path", "expect": "file",
++         "path": "${PATH_TEMPLATES_EXCEL:-/app/doc/template_sen.xlsx}"},
++        {"name": "список ОФФ", "type": "path", "expect": "file",
++         "path": "${PATH_OFF_LIST_EXCEL:-/app/doc/OFF_actual.xlsx}"},
++        # evaluator.py читает промпты из prompts_structure; в репозитории этой папки нет,
++        # docker создаёт на её месте пустой каталог
++        {"name": "промпты LLM-оценщика", "type": "path", "expect": "dir_nonempty", "path": "/app/prompts_structure"},
++        {"name": "results на запись", "type": "path", "expect": "writable", "path": "${PATH_RESULTS_DIR:-/app/results}"},
++        {"name": "logs на запись", "type": "path", "expect": "writable", "path": "${PATH_LOGS_DIR:-/app/logs}"},
++    ],
++    "stt-service": [
++        {"name": "кэш моделей на запись", "type": "path", "expect": "writable", "path": "/models"},
++        {"name": "словарь", "type": "path", "expect": "file", "path": "${STT_WORDS_FILE:-/app/data/words.txt}"},
++    ],
++    "annotator": [
++        {"name": "модели", "type": "path", "expect": "dir_nonempty", "path": "${MODELS_DIR:-/app/models}"},
++    ],
++}
++
++CASES = [(svc, c["name"]) for svc, checks in CHECKS.items() for c in checks]
++
++
++@pytest.mark.parametrize("service,check", CASES, ids=["%s: %s" % c for c in CASES])
++def test_artifact_present(stack, require, service, check):
++    require(service)
++    r = stack.probe(service, CHECKS[service])[check]
++    if r["skipped"]:
++        pytest.skip(r["detail"])
++    assert r["ok"], "%s — %s: %s" % (service, check, r["detail"])
+diff --git a/tests/health/test_05_database.py b/tests/health/test_05_database.py
+new file mode 100644
+index 0000000..17bd9b7
+--- /dev/null
++++ b/tests/health/test_05_database.py
+@@ -0,0 +1,175 @@
++"""Уровень 4: база данных — та самая, с которой работает backend: расширения, схема, данные, целостность."""
++import os
++
++import pytest
++
++EXPECTED_TABLES = [
++    "object_type", "object", "object_name_synonym", "object_name_synonym_link", "object_object_link",
++    "modality", "text_value", "image_value", "geodata_value", "resource_value",
++    "author", "source", "reliability_level", "bibliographic", "creation", "resource_static",
++    "support_metadata", "resource", "resource_object", "resource_resource_link",
++    "object_property", "resource_feature",
++    "resource_resource_relation_type", "object_object_relation_type", "resource_object_relation_type",
++]
++OBJECT_TYPES = ["Объект флоры и фауны", "Географический объект", "Услуга"]
++# Импортёр сохраняет «Картографическая информация» из resources.json как «Геоданные»
++MODALITIES = ["Текст", "Изображение", "Геоданные"]
++MIN_OBJECTS = int(os.getenv("HEALTH_MIN_OBJECTS", "1000"))       # в json_files/objects.json ~7.8 тыс.
++MIN_RESOURCES = int(os.getenv("HEALTH_MIN_RESOURCES", "1000"))   # в json_files/resources.json ~10.7 тыс.
++KNOWN_OBJECTS = [x.strip() for x in os.getenv(
++    "HEALTH_KNOWN_OBJECTS", "Байкальская нерпа,Байкальский омуль,Листвянка").split(",") if x.strip()]
++
++
++def test_connected_to_expected_database(sql, db_params):
++    (dbname, user), = sql("select current_database(), current_user")
++    assert (dbname, user) == (db_params["dbname"], db_params["user"])
++
++
++@pytest.mark.parametrize("ext", ["postgis", "vector", "pg_trgm"])
++def test_extension_installed(sql, ext):
++    rows = sql("select extversion from pg_extension where extname = %s", (ext,))
++    assert rows, "Расширение %s не установлено в БД (db_custom/init.sql выполняется только на пустом томе)" % ext
++
++
++def test_postgis_works(sql):
++    (area,), = sql("select ST_Area(ST_MakeEnvelope(0, 0, 2, 3, 4326))")
++    assert area == 6
++
++
++def test_schema_tables_exist(sql):
++    rows = sql("select table_name from information_schema.tables where table_schema = 'eco_assistant'")
++    missing = sorted(set(EXPECTED_TABLES) - {r[0] for r in rows})
++    assert not missing, "В схеме eco_assistant нет таблиц: %s — импорт (scripts/init_db.sh) не запускался?" % missing
++
++
++def test_error_log_table_exists(sql):
++    """public.error_log: туда пишет backend (/log_error), читает админка (/admin/logs)."""
++    assert sql("select to_regclass('public.error_log')")[0][0], "Нет таблицы public.error_log"
++
++
++def test_object_types_seeded(sql):
++    names = {r[0] for r in sql("select name from eco_assistant.object_type")}
++    missing = [t for t in OBJECT_TYPES if t not in names]
++    assert not missing, "В object_type нет %s (на них завязаны константы *_OBJECT_TYPE_ID в админке)" % missing
++
++
++def test_object_type_ids_match_admin_constants(sql):
++    """AdminPanel/main.py: BIO_OBJECT_TYPE_ID=1, GEO=2, SERVICE=3 — захардкожено."""
++    ids = dict(sql("select name, id from eco_assistant.object_type"))
++    expected = dict(zip(OBJECT_TYPES, [1, 2, 3]))
++    wrong = {k: ids.get(k) for k, v in expected.items() if ids.get(k) != v}
++    assert not wrong, "id типов объектов не совпадают с константами админки: %s" % wrong
++
++
++def test_modalities_present(sql):
++    rows = dict(sql("select modality_type, value_table_name from eco_assistant.modality"))
++    missing = [m for m in MODALITIES if m not in rows]
++    assert not missing, "Нет модальностей %s (есть: %s)" % (missing, sorted(rows))
++
++
++def test_objects_loaded(sql):
++    (n,), = sql("select count(*) from eco_assistant.object")
++    assert n >= MIN_OBJECTS, "Объектов %d < %d — БД не наполнена или наполнена частично" % (n, MIN_OBJECTS)
++
++
++@pytest.mark.parametrize("type_name", OBJECT_TYPES)
++def test_objects_of_each_type(sql, type_name):
++    (n,), = sql("""select count(*) from eco_assistant.object o
++                   join eco_assistant.object_type t on t.id = o.object_type_id where t.name = %s""", (type_name,))
++    assert n > 0, "Нет ни одного объекта типа %r" % type_name
++
++
++def test_resources_loaded(sql):
++    (n,), = sql("select count(*) from eco_assistant.resource")
++    assert n >= MIN_RESOURCES, "Ресурсов %d < %d" % (n, MIN_RESOURCES)
++
++
++@pytest.mark.parametrize("modality", MODALITIES)
++def test_resources_of_each_modality(sql, modality):
++    (n,), = sql("""select count(*) from eco_assistant.resource_value rv
++                   join eco_assistant.modality m on m.id = rv.modality_id where m.modality_type = %s""", (modality,))
++    assert n > 0, "Нет ресурсов модальности %r" % modality
++
++
++def test_resource_features_catalog_not_empty(sql):
++    """core-api при старте грузит отсюда допустимые признаки; пусто → валидация признаков молча выключена."""
++    (n,), = sql("select count(*) from eco_assistant.resource_feature")
++    assert n > 0, "eco_assistant.resource_feature пуст"
++
++
++@pytest.mark.parametrize("name", KNOWN_OBJECTS)
++def test_known_object_has_resources(sql, name):
++    rows = sql("""
++        select o.db_id, count(ro.resource_id)
++        from eco_assistant.object_name_synonym s
++        join eco_assistant.object_name_synonym_link l on l.synonym_id = s.id
++        join eco_assistant.object o on o.id = l.object_id
++        left join eco_assistant.resource_object ro on ro.object_id = o.id
++        where lower(s.synonym) = lower(%s)
++        group by o.db_id""", (name,))
++    assert rows, "Объект %r не найден по синонимам" % name
++    assert any(cnt > 0 for _, cnt in rows), "У объекта %r нет ни одного ресурса: %s" % (name, rows)
++
++
++def test_resource_value_points_to_existing_resource(sql):
++    """resource_value.resource_id объявлен без внешнего ключа — висячие ссылки возможны."""
++    (n,), = sql("""select count(*) from eco_assistant.resource_value rv
++                   left join eco_assistant.resource r on r.id = rv.resource_id where r.id is null""")
++    assert n == 0, "%d строк resource_value ссылаются на несуществующий resource" % n
++
++
++def test_resource_value_points_to_existing_value(sql):
++    """value_id ссылается в таблицу из modality.value_table_name — тоже без внешнего ключа."""
++    problems = []
++    for modality, table in sql("select modality_type, value_table_name from eco_assistant.modality"):
++        if not sql("select to_regclass(%s)", ("eco_assistant." + table,))[0][0]:
++            problems.append("%s: таблицы %s нет" % (modality, table))
++            continue
++        (n,), = sql("""select count(*) from eco_assistant.resource_value rv
++                       join eco_assistant.modality m on m.id = rv.modality_id
++                       left join eco_assistant.{t} v on v.id = rv.value_id
++                       where m.modality_type = %s and rv.value_id is not null and v.id is null""".format(t=table),
++                    (modality,))
++        if n:
++            problems.append("%s: %d висячих value_id → %s" % (modality, n, table))
++    assert not problems, "\n".join(problems)
++
++
++def test_image_urls_have_no_template_placeholder(sql):
++    """resources.json содержит {{PUBLIC_BASE_URL}} — init_db.sh должен был его подставить."""
++    (n,), = sql("""select count(*) from eco_assistant.image_value
++                   where file_path like '%%{{%%' or url like '%%{{%%'""")
++    assert n == 0, "%d картинок с неподставленным {{PUBLIC_BASE_URL}} в адресе" % n
++
++
++def test_image_paths_are_absolute_urls(sql):
++    rows = sql("""select file_path from eco_assistant.image_value
++                  where file_path is not null and file_path !~ '^https?://' limit 5""")
++    assert not rows, "Пути к фото не являются URL (браузер их не откроет): %s" % [r[0] for r in rows]
++
++
++def test_map_resources_have_geometry(sql):
++    """Импортёр берёт геометрии из json_files/geodb.json, а он в salut_bot/.gitignore — на чистом клоне
++    его нет, и все ресурсы «Картографическая информация» импортируются без геометрии (value_id = NULL)."""
++    (total, empty), = sql("""select count(*), count(*) filter (where rv.value_id is null)
++                             from eco_assistant.resource_value rv
++                             join eco_assistant.modality m on m.id = rv.modality_id
++                             where m.modality_type = 'Геоданные'""")
++    assert total > 0, "Нет ни одного картографического ресурса"
++    assert empty == 0, ("%d из %d картографических ресурсов без геометрии — карты и поиск по области "
++                        "работать не будут. Нужен geodb.json при импорте (или --ensure-geometries)." % (empty, total))
++
++
++def test_geodata_srid_4326(sql):
++    (n,), = sql("select count(*) from eco_assistant.geodata_value where ST_SRID(geometry) <> 4326")
++    assert n == 0, "%d геообъектов не в SRID 4326" % n
++
++
++def test_geodata_mostly_valid(sql):
++    (total, invalid), = sql("""select count(*), count(*) filter (where not ST_IsValid(geometry))
++                               from eco_assistant.geodata_value""")
++    if total == 0:
++        pytest.skip("геометрий нет вообще — см. test_map_resources_have_geometry")
++    share = invalid / total
++    assert share <= 0.01, "%.1f%% геометрий невалидны (%d из %d) — поиск по полигонам будет врать" % (
++        share * 100, invalid, total)
+diff --git a/tests/health/test_06_redis.py b/tests/health/test_06_redis.py
+new file mode 100644
+index 0000000..002d9fd
+--- /dev/null
++++ b/tests/health/test_06_redis.py
+@@ -0,0 +1,34 @@
++"""Уровень 5: Redis как шина между сервисами.
++
++Раскладка по базам (из кода):
++  db0 — настройки из админки (settings:*), история диалогов, канал config:reload (admin/core-api → max)
++  db1 — кэш поиска backend (REDIS_DB по умолчанию 1)
++  db2 — heartbeat бота (ключ baikal_bot_last_seen, читает админка)
++"""
++
++
++def test_redis_ping(redis_db):
++    assert redis_db(0).ping()
++
++
++def test_admin_initialized_settings(redis_db):
++    """Админка при старте кладёт settings:* с nx=True — если ключей нет, админка смотрит в другой Redis/БД
++    или не стартовала."""
++    r = redis_db(0)
++    missing = [k for k in ("settings:promo_enabled", "settings:multi_act_dialog") if r.get(k) is None]
++    assert not missing, "В Redis db0 нет %s" % missing
++
++
++def test_max_listens_config_reload(redis_db, require):
++    """max подписан на config:reload — иначе «Сохранить» в настройках админки не применяется к боту без рестарта."""
++    require("max")
++    (_, subscribers), = redis_db(0).pubsub_numsub("config:reload")
++    assert subscribers >= 1, "На канал config:reload никто не подписан — max не слушает перезагрузку конфига"
++
++
++def test_bot_heartbeat_present(redis_db, require):
++    """Индикатор «бот онлайн» в админке = наличие ключа baikal_bot_last_seen (TTL 120 с) в db2."""
++    require("max")
++    value = redis_db(2).get("baikal_bot_last_seen")
++    assert value, ("Ключа heartbeat нет — админка всегда покажет «бот offline». "
++                   "BotHeartbeat.ping() есть в utils/heartbeat.py, но в main_max.py его никто не вызывает.")
+diff --git a/tests/health/test_07_services.py b/tests/health/test_07_services.py
+new file mode 100644
+index 0000000..5532cb8
+--- /dev/null
++++ b/tests/health/test_07_services.py
+@@ -0,0 +1,242 @@
++"""Уровень 6: каждый сервис отвечает по своему API (напрямую по ecobot_net, без nginx)
++и контракты между сервисами совпадают: то, что вызывает клиент, реально есть у сервера."""
++import io
++import json
++import math
++import struct
++import wave
++
++import pytest
++
++from conftest import SLOW_TIMEOUT
++
++# Маршруты backend, на которые завязаны core-api/max (DialogService/config.py API_URLS) и dsapi
++BACKEND_ROUTES = [
++    "/health", "/search", "/species/description", "/object/description", "/search_images_by_features",
++    "/get_coords", "/coords_to_map", "/objects_in_polygon_simply", "/find_species_with_description",
++    "/objects_in_area_by_type", "/log_error", "/faiss_status", "/search/place/objects", "/objects/related",
++    "/find_off_near_attractions", "/reload_database",
++]
++CORE_API_ROUTES = ["/classify", "/search_pipeline", "/callback_simplify", "/prompts", "/config", "/reload"]
++
++
++def openapi_paths(http, service):
++    resp = http(service).get("/openapi.json")
++    assert resp.status_code == 200, "%s: /openapi.json → HTTP %s" % (service, resp.status_code)
++    return set(resp.json()["paths"])
++
++
++# --- backend -----------------------------------------------------------------
++
++def test_backend_health(http, require):
++    require("backend")
++    resp = http("backend").get("/health")
++    assert resp.status_code == 200 and resp.json().get("status") == "ok", resp.text[:300]
++
++
++def test_backend_all_routes_registered(http, require):
++    """Ловит регресс вида `app.include_router(router)` вместо цикла по all_routers."""
++    require("backend")
++    missing = [p for p in BACKEND_ROUTES if p not in openapi_paths(http, "backend")]
++    assert not missing, "backend не зарегистрировал маршруты: %s" % missing
++
++
++def test_backend_faiss_loaded(http, require):
++    require("backend")
++    data = http("backend").get("/faiss_status").json()
++    assert data.get("status") == "success", data
++    info = data["data"]
++    assert info.get("faiss_vectorstore_loaded"), "FAISS не загружен: %s" % info
++    assert info.get("index_size", 0) > 0, "FAISS-индекс пустой: %s" % info
++
++
++def test_backend_search_returns_data(http, require):
++    """POST /search уходит в Postgres; ошибки backend возвращает как HTTP 200 + {"error": ...}."""
++    require("backend")
++    body = {"system_parameters": {"limit": 5},
++            "search_parameters": {"modality_type": "Текст",
++                                  "object": {"name_synonyms": {"ru_names": ["Байкальская нерпа"]}}}}
++    resp = http("backend").post("/search", json=body, timeout=60)
++    assert resp.status_code == 200, resp.text[:300]
++    data = resp.json()
++    assert "error" not in data, "backend /search: %s" % data["error"]
++    assert data.get("resources") or data.get("objects"), "Пустой ответ /search для нерпы: %s" % str(data)[:300]
++
++
++def test_backend_species_description(http, require):
++    require("backend")
++    resp = http("backend").get("/species/description", params={"species_name": "Байкальская нерпа"}, timeout=120)
++    assert resp.status_code == 200, "HTTP %s: %s" % (resp.status_code, resp.text[:300])
++    assert resp.json().get("count", 0) > 0, resp.text[:300]
++
++
++def test_dialogservice_urls_exist_in_backend(stack, http, require):
++    """Контракт core-api → backend: каждый адрес из DialogService/config.py API_URLS есть в backend."""
++    require("core-api")
++    require("backend")
++    code, out = stack.exec("core-api", ["python", "-c", "import config, json; print(json.dumps(config.API_URLS))"])
++    if code != 0:
++        pytest.fail("config.py в core-api не импортируется: %s" % out.strip().splitlines()[-1])
++    urls = json.loads(out.strip().splitlines()[-1])
++    backend_base = stack.env("core-api").get("ECOBOT_API_BASE_URL", "").rstrip("/")
++    paths = openapi_paths(http, "backend")
++    missing = []
++    for name, url in urls.items():
++        if not url.startswith(backend_base):
++            continue   # stand_endpoint — внешний сервис
++        path = url[len(backend_base):].rstrip("/") or "/"
++        if path not in paths:
++            missing.append("%s → %s" % (name, url))
++    assert not missing, "core-api вызывает несуществующие маршруты backend:\n  " + "\n  ".join(missing)
++
++
++def test_backend_trailing_slash_redirect_works(http, require):
++    """API_URLS['get_description'] = .../species/description/ (со слэшем). FastAPI отвечает 307 на адрес
++    без слэша — Location должен вести обратно в backend, а не на адрес с BASE_PATH, которого внутри нет."""
++    require("backend")
++    resp = http("backend").get("/species/description/", params={"species_name": "Байкальская нерпа"},
++                               allow_redirects=True, timeout=120)
++    assert resp.status_code == 200, "HTTP %s после редиректов %s" % (
++        resp.status_code, [r.headers.get("location") for r in resp.history])
++
++
++# --- core-api ----------------------------------------------------------------
++
++def test_core_api_routes(http, require):
++    require("core-api")
++    missing = [p for p in CORE_API_ROUTES if p not in openapi_paths(http, "core-api")]
++    assert not missing, "core-api: нет маршрутов %s (их вызывает админка)" % missing
++
++
++def test_core_api_prompts(http, require):
++    require("core-api")
++    prompts = http("core-api").get("/prompts").json()
++    assert prompts.get("classification_prompt.txt"), "core-api не видит prompts/classification_prompt.txt"
++
++
++@pytest.mark.slow
++@pytest.mark.llm
++def test_core_api_classify(http, require):
++    """core-api → LLM: классификация запроса на слоты."""
++    require("core-api")
++    resp = http("core-api").post("/classify", json={"query": "Расскажи о байкальской нерпе"}, timeout=SLOW_TIMEOUT)
++    assert resp.status_code == 200, resp.text[:300]
++    data = resp.json()
++    # ошибку LLM core-api не пробрасывает, а кладёт в поле error ответа и отвечает 200
++    assert isinstance(data, dict) and not data.get("error"), "LLM вернул ошибку: %s" % data.get("error")
++
++
++# --- admin -------------------------------------------------------------------
++
++def test_admin_login_page(http, require):
++    require("admin")
++    resp = http("admin").get("/login")
++    assert resp.status_code == 200 and 'name="password"' in resp.text, "HTTP %s" % resp.status_code
++
++
++def test_admin_redirects_to_login_with_base_path(http, require, base_path):
++    require("admin")
++    resp = http("admin").get("/")
++    assert resp.status_code in (302, 303, 307), "HTTP %s" % resp.status_code
++    location = resp.headers.get("location", "")
++    assert location == "%s/admin/login" % base_path, "Location=%r, ожидали %r" % (location, base_path + "/admin/login")
++
++
++def test_admin_static(http, require):
++    require("admin")
++    resp = http("admin").get("/admin/static/css/style.css")
++    assert resp.status_code == 200 and "css" in resp.headers.get("content-type", ""), resp.status_code
++
++
++@pytest.mark.parametrize("page", ["/", "/flora", "/geographical", "/settings", "/properties"])
++def test_admin_pages_after_login(http, require, admin_session, page):
++    """Страницы админки ходят в Postgres (asyncpg) и core-api (/settings → /prompts)."""
++    require("admin")
++    resp = http("admin").get(page, headers=admin_session, timeout=60)
++    assert resp.status_code == 200, "%s → HTTP %s: %s" % (page, resp.status_code, resp.text[:300])
++    assert "Internal Server Error" not in resp.text
++
++
++def test_admin_bot_status_api(http, require):
++    require("admin")
++    data = http("admin").get("/bot-status").json()
++    assert "online" in data, data
++
++
++# --- dsapi -------------------------------------------------------------------
++
++def test_dsapi_up(http, require):
++    require("dsapi")
++    assert "/api/v1/pipeline_testing/start" in openapi_paths(http, "dsapi")
++
++
++def test_dsapi_accepts_admin_token(stack, http, require):
++    """Контракт admin → dsapi: TEST_API_BASE + Bearer TEST_TOKEN."""
++    require("dsapi")
++    require("admin")
++    env = stack.env("admin")
++    base, token = env.get("TEST_API_BASE", ""), env.get("TEST_TOKEN", "")
++    assert base, "TEST_API_BASE в admin не задан"
++    resp = http(base).get("/status/healthcheck-nonexistent", headers={"Authorization": "Bearer " + token})
++    assert resp.status_code not in (401, 403), "dsapi отверг токен админки: HTTP %s" % resp.status_code
++    assert resp.status_code in (200, 404), "HTTP %s: %s" % (resp.status_code, resp.text[:200])
++
++
++# --- stt-service -------------------------------------------------------------
++
++def test_stt_health(http, require):
++    require("stt-service")
++    data = http("stt-service").get("/health").json()
++    assert data.get("status") == "ok", data
++
++
++def _tone_wav(seconds=1.0, rate=16000):
++    buf = io.BytesIO()
++    with wave.open(buf, "wb") as w:
++        w.setnchannels(1)
++        w.setsampwidth(2)
++        w.setframerate(rate)
++        w.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / rate)))
++                               for i in range(int(seconds * rate))))
++    return buf.getvalue()
++
++
++@pytest.mark.slow
++def test_stt_transcribe(http, require):
++    """ffmpeg + whisper реально работают. Первый вызов скачивает модель (нужен интернет к HuggingFace)."""
++    require("stt-service")
++    resp = http("stt-service").post("/transcribe", files={"file": ("tone.wav", _tone_wav(), "audio/wav")},
++                                    timeout=SLOW_TIMEOUT * 2)
++    assert resp.status_code == 200, "HTTP %s: %s" % (resp.status_code, resp.text[:300])
++    assert "text" in resp.json()
++
++
++# --- max -----------------------------------------------------------------------
++
++def test_max_webhook_listening(stack, http, require):
++    """aiohttp-сервер maxapi слушает MAX_WEBHOOK_PORT/MAX_WEBHOOK_PATH (только в режиме webhook)."""
++    require("max")
++    env = stack.env("max")
++    if env.get("MAX_USE_WEBHOOK", "").lower() != "true":
++        pytest.skip("max в режиме polling")
++    path = "/" + env.get("MAX_WEBHOOK_PATH", "/").lstrip("/")
++    resp = http("max").get(path)
++    assert resp.status_code != 404, "max не обслуживает %s (HTTP 404)" % path
++
++
++# --- annotator ---------------------------------------------------------------
++
++def test_annotator_health(http, require):
++    require("annotator")
++    data = http("annotator").get("/health").json()
++    assert data.get("status") == "ok", data
++    assert data.get("executors"), "Ни одна модель аннотатора не загрузилась: %s" % data
++    assert not data.get("failed"), "Модели аннотатора с ошибкой загрузки: %s" % data["failed"]
++
++
++def test_annotator_accepts_admin_token(stack, http, require):
++    require("annotator")
++    require("admin")
++    token = stack.env("admin").get("ANNOTATOR_TOKEN", "")
++    resp = http("annotator").get("/executors", headers={"X-API-Token": token})
++    assert resp.status_code == 200, "аннотатор отверг токен админки: HTTP %s" % resp.status_code
+diff --git a/tests/health/test_08_nginx.py b/tests/health/test_08_nginx.py
+new file mode 100644
+index 0000000..439cc85
+--- /dev/null
++++ b/tests/health/test_08_nginx.py
+@@ -0,0 +1,120 @@
++"""Уровень 7: маршрутизация снаружи внутрь.
++
++  cloud-b (срезает /ecoassistant) → системный nginx хоста :80 → docker-nginx → сервисы
++
++Внутренний docker-nginx проверяем запросами без префикса — ровно так, как их присылает cloud-b.
++Затем ту же цепочку через nginx хоста и через публичный адрес.
++"""
++import random
++import urllib.parse
++
++import pytest
++
++ROUTES = [
++    # (путь от корня после cloud-b, ожидаемый статус, кусок ответа / заголовок, кто должен ответить)
++    ("/health", 200, '"status"', "backend"),
++    ("/search/health", 200, '"status"', "backend через /search/"),
++    ("/core-api/openapi.json", 200, '"/search_pipeline"', "core-api"),
++    ("/admin/login", 200, 'name="password"', "admin"),
++    ("/admin/static/css/style.css", 200, None, "admin (статика)"),
++]
++
++
++@pytest.mark.parametrize("path,status,needle,who", ROUTES, ids=[r[0] for r in ROUTES])
++def test_nginx_routes(http, require, path, status, needle, who):
++    require("nginx")
++    resp = http("nginx").get(path)
++    assert resp.status_code == status, "%s → HTTP %s (должен отвечать %s)" % (path, resp.status_code, who)
++    if needle:
++        assert needle in resp.text, "%s ответил не %s: %s" % (path, who, resp.text[:200])
++
++
++def test_nginx_admin_redirect_keeps_single_prefix(http, require, base_path):
++    require("nginx")
++    resp = http("nginx").get("/admin/")
++    location = resp.headers.get("location", "")
++    assert resp.status_code in (302, 303, 307), resp.status_code
++    assert location.endswith("%s/admin/login" % base_path) and "/ecoassistant/ecoassistant" not in location, location
++
++
++def test_nginx_routes_max_webhook_to_max(stack, http, require):
++    """README и docker-compose.cloudb.yml обещают /ecoassistant/max-webhook → max:8080.
++    Без отдельного location запрос падает в `location /` → backend → 404, и бот не получает сообщений."""
++    require("nginx")
++    require("max")
++    env = stack.env("max")
++    if env.get("MAX_USE_WEBHOOK", "").lower() != "true":
++        pytest.skip("max в режиме polling")
++    path = "/" + env.get("MAX_WEBHOOK_PATH", "/max-webhook").lstrip("/")
++    via_nginx = http("nginx").get(path)
++    direct = http("max").get(path)
++    assert via_nginx.status_code == direct.status_code, (
++        "GET %s: через nginx HTTP %s (%s), напрямую в max HTTP %s — nginx отправляет webhook не в max"
++        % (path, via_nginx.status_code, via_nginx.text[:80], direct.status_code))
++
++
++def _sample_image_urls(sql, n=5):
++    rows = sql("select file_path from eco_assistant.image_value where file_path ~ '^https?://' "
++               "order by random() limit %s", (n,))
++    return [r[0] for r in rows]
++
++
++def test_images_from_db_are_served(sql, http, require, public_base_url):
++    """Фото, на которые ссылается БД, реально отдаются. Локальные (PUBLIC_BASE_URL/images/...) — через
++    docker-nginx; внешние (например IMPORT_IMAGES_BASE_URL=https://testecobot.ru) — по их адресу."""
++    require("nginx")
++    urls = _sample_image_urls(sql)
++    if not urls:
++        pytest.skip("в БД нет картинок с URL")
++    broken = []
++    for url in urls:
++        if url.startswith(public_base_url + "/"):
++            target = http("nginx").base + urllib.parse.quote(url[len(public_base_url):])
++        else:
++            target = url
++        try:
++            resp = http("nginx").get(target, timeout=20, allow_redirects=True)
++            ok = resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/")
++            if not ok:
++                broken.append("%s → HTTP %s %s" % (url, resp.status_code, resp.headers.get("content-type")))
++        except Exception as exc:
++            broken.append("%s → %s" % (url, exc.__class__.__name__))
++    assert not broken, "Из %d случайных фото не открываются:\n  %s" % (len(urls), "\n  ".join(broken))
++
++
++def test_maps_are_served(stack, http, require):
++    require("nginx")
++    code, out = stack.exec("nginx", ["sh", "-c", "ls /var/www/maps | grep -E '\\.(html|png)$' | head -50"])
++    names = [x for x in out.splitlines() if x.strip()]
++    if not names:
++        pytest.skip("в maps/ пока нет файлов")
++    name = random.choice(names)
++    resp = http("nginx").get("/maps/" + urllib.parse.quote(name))
++    assert resp.status_code == 200, "/maps/%s → HTTP %s" % (name, resp.status_code)
++
++
++@pytest.mark.host
++@pytest.mark.parametrize("path,status,needle,who", ROUTES[:4], ids=[r[0] for r in ROUTES[:4]])
++def test_host_nginx_chain(http, path, status, needle, who):
++    """Системный nginx хоста (/etc/nginx/sites-enabled.d/ecoassistant.conf) → 127.0.0.1:8088."""
++    resp = http("http://host.docker.internal:80").get(path)
++    assert resp.status_code == status, "хост :80 %s → HTTP %s (должен отвечать %s)" % (path, resp.status_code, who)
++    if needle:
++        assert needle in resp.text
++
++
++@pytest.mark.public
++@pytest.mark.parametrize("path,status,needle,who", ROUTES[:4], ids=[r[0] for r in ROUTES[:4]])
++def test_public_url(http, public_base_url, path, status, needle, who):
++    resp = http(public_base_url).get(path, timeout=30)
++    assert resp.status_code == status, "%s%s → HTTP %s" % (public_base_url, path, resp.status_code)
++    if needle:
++        assert needle in resp.text
++
++
++@pytest.mark.public
++def test_public_admin_redirect(http, public_base_url, base_path):
++    resp = http(public_base_url).get("/admin/", timeout=30)
++    location = resp.headers.get("location", "")
++    assert resp.status_code in (302, 303, 307), resp.status_code
++    assert urllib.parse.urlparse(location).path == base_path + "/admin/login", location
+diff --git a/tests/health/test_09_security.py b/tests/health/test_09_security.py
+new file mode 100644
+index 0000000..eb1d4b0
+--- /dev/null
++++ b/tests/health/test_09_security.py
+@@ -0,0 +1,76 @@
++"""То, что не должно быть доступно без авторизации.
++
++Проверяем через docker-nginx (маршрутизация та же, что у публичного адреса), поэтому тесты работают
++и без доступа в интернет. Только безопасные запросы: GET и POST /reload_database с reload_database=false
++(при false эндпоинт сразу возвращает ошибку и ничего не делает).
++"""
++import os
++
++import pytest
++
++pytestmark = pytest.mark.security
++
++LOGIN_REDIRECT = (302, 303, 307, 401, 403)
++
++
++def _upstream_alive(resp, path):
++    if resp.status_code in (502, 503, 504):
++        pytest.fail("%s → HTTP %s: сервис за nginx не отвечает, проверить безопасность нельзя (см. test_01)"
++                    % (path, resp.status_code))
++
++
++@pytest.mark.parametrize("path", [
++    "/admin/",
++    "/admin/logs",                         # журнал ошибок с запросами пользователей
++    "/admin/logs/stats",
++    "/admin/object/search?q=%D0%BD%D0%B5%D1%80%D0%BF%D0%B0",   # поиск по БД объектов
++    "/admin/object/link-types",
++    "/admin/chat/promo-setting",
++])
++def test_admin_requires_login(http, require, path):
++    require("nginx")
++    resp = http("nginx").get(path)
++    _upstream_alive(resp, path)
++    assert resp.status_code in LOGIN_REDIRECT, (
++        "%s без логина → HTTP %s (%d байт). Проверка сессии в AdminPanel/main.py сделана вручную в каждом "
++        "роуте, и здесь её нет." % (path, resp.status_code, len(resp.content)))
++
++
++@pytest.mark.parametrize("path", ["/core-api/prompts", "/core-api/config"])
++def test_core_api_admin_endpoints_not_public(http, require, path):
++    """У core-api нет авторизации, а nginx публикует его целиком: POST /core-api/prompts и /core-api/config
++    позволяют кому угодно из интернета переписать промпты LLM и .env бота."""
++    require("nginx")
++    resp = http("nginx").get(path)
++    _upstream_alive(resp, path)
++    assert resp.status_code in (401, 403, 404), "%s доступен без авторизации: HTTP %s" % (path, resp.status_code)
++
++
++def test_backend_reload_database_not_public(http, require):
++    require("nginx")
++    resp = http("nginx").post("/reload_database", data={"reload_database": "false"})
++    _upstream_alive(resp, "/reload_database")
++    assert resp.status_code in (401, 403, 404), (
++        "POST /reload_database (перезагрузка всей БД) доступен из интернета без авторизации: HTTP %s %s"
++        % (resp.status_code, resp.text[:120]))
++
++
++def test_admin_default_password_rejected(http, require):
++    require("admin")
++    resp = http("admin").post("/login", data={"username": "admin", "password": "admin"})
++    assert "ecoassistant_admin_session" not in resp.cookies, "В админку пускает admin/admin"
++
++
++def test_no_ports_published_to_network(stack):
++    """Фаервол на сервере выключен: всё, что опубликовано на 0.0.0.0, видно из сети университета.
++    На cloud-b наружу не должно смотреть ничего (nginx — только 127.0.0.1:8088)."""
++    allowed = {int(p) for p in os.getenv("HEALTH_ALLOWED_PUBLIC_PORTS", "").split(",") if p.strip()}
++    exposed = []
++    for service in stack.services_running():
++        ports = stack.container(service).attrs["NetworkSettings"].get("Ports") or {}
++        for container_port, bindings in ports.items():
++            for b in bindings or []:
++                if b.get("HostIp") in ("0.0.0.0", "::", "") and int(b["HostPort"]) not in allowed:
++                    exposed.append("%s: %s:%s → %s" % (service, b.get("HostIp") or "*", b["HostPort"], container_port))
++    assert not exposed, ("Опубликовано на все интерфейсы (на cloud-b должен быть подключён "
++                         "docker-compose.cloudb.yml через COMPOSE_FILE в .env):\n  " + "\n  ".join(sorted(set(exposed))))
+diff --git a/tests/health/test_10_e2e.py b/tests/health/test_10_e2e.py
+new file mode 100644
+index 0000000..72b903f
+--- /dev/null
++++ b/tests/health/test_10_e2e.py
+@@ -0,0 +1,46 @@
++"""Сквозные сценарии: запрос проходит всю цепочку и возвращает осмысленный ответ.
++
++  core-api /search_pipeline:  core-api → LLM (классификация) → backend → Postgres/FAISS → ответ
++  admin /chat/search:         admin → core-api → … (то же, что видит пользователь в чате админки)
++"""
++import pytest
++
++from conftest import SLOW_TIMEOUT
++
++pytestmark = [pytest.mark.slow, pytest.mark.llm]
++
++QUERY = "Расскажи о байкальской нерпе"
++
++
++def _answer(data):
++    result = data.get("result") or {}
++    return result.get("answer") if isinstance(result, dict) else None
++
++
++def _root_cause(data):
++    """core-api отвечает 200 даже при ошибке LLM — причина лежит в slots.error."""
++    slots = data.get("slots") or {}
++    return slots.get("error") if isinstance(slots, dict) else None
++
++
++def test_core_api_search_pipeline(http, require):
++    require("core-api")
++    resp = http("core-api").post("/search_pipeline", json={"query": QUERY, "user_id": "healthcheck"},
++                                 timeout=SLOW_TIMEOUT)
++    assert resp.status_code == 200, "HTTP %s: %s" % (resp.status_code, resp.text[:300])
++    data = resp.json()
++    assert "error" not in data, data["error"]
++    assert not _root_cause(data), "Классификация упала (LLM): %s" % _root_cause(data)
++    answer = _answer(data)
++    assert answer, "Пустой ответ пайплайна: %s" % str(data)[:400]
++    assert "устарел" not in answer and "не готов" not in answer, answer[:200]
++
++
++def test_admin_chat_search(http, require, admin_session):
++    require("admin")
++    resp = http("admin").post("/chat/search", json={"text": QUERY}, headers=admin_session, timeout=SLOW_TIMEOUT)
++    assert resp.status_code == 200, resp.text[:300]
++    data = resp.json()
++    assert "error" not in data, data["error"]
++    assert not _root_cause(data), "Классификация упала (LLM): %s" % _root_cause(data)
++    assert _answer(data), "Пустой ответ чата админки: %s" % str(data)[:400]

@@ -1,53 +1,26 @@
 #!/usr/bin/env bash
-# =============================================================
-# install.sh — установка EcoBot на новый сервер
-# Использование: sudo bash install.sh
-# =============================================================
 set -euo pipefail
 
-REPO_ROOT="$(pwd)"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_DIR"
 
-RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
-log()  { echo -e "${GREEN}[install]${NC} $*"; }
-warn() { echo -e "${YELLOW}[install]${NC} $*"; }
-die()  { echo -e "${RED}[install] ERROR:${NC} $*" >&2; exit 1; }
-ask()  { echo -e "${CYAN}[install]${NC} $*"; }
+# Конвертация возможных CRLF окончаний строк в LF
+find . -maxdepth 3 -type f \( -name "*.sh" -o -name "*.py" -o -name "*.env*" \) -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 
-# -----------------------------------------------------------
-# 1. Проверка зависимостей
-# -----------------------------------------------------------
-log "Проверка зависимостей..."
-command -v docker       >/dev/null 2>&1 || die "docker не установлен"
-docker compose version  >/dev/null 2>&1 || die "docker compose plugin не установлен"
-command -v python3      >/dev/null 2>&1 || die "python3 не установлен"
-command -v git          >/dev/null 2>&1 || die "git не установлен"
-log "Зависимости ОК"
+echo "=== [1/6] Запуск bootstrap.sh ==="
+bash ./bootstrap.sh
 
-# -----------------------------------------------------------
-# 2. Сбор конфигурации
-# -----------------------------------------------------------
-echo ""
-ask "=== Настройка сервера ==="
+echo "=== [2/6] Патчинг всех микросервисов и AdminPanel под BASE_PATH из shared.env ==="
+python3 ./patch_base_path.py
 
-ask "Публичный адрес сервера (домен или IP, без слэша в конце)."
-ask "Примеры: https://ecobot.example.com  |  http://192.168.1.10"
-read -r -p "PUBLIC_BASE_URL: " PUBLIC_BASE_URL < /dev/tty
-PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"
-[[ -n "$PUBLIC_BASE_URL" ]] || die "PUBLIC_BASE_URL не может быть пустым"
-
-USE_SSL=false
-DOMAIN=""
-if [[ "$PUBLIC_BASE_URL" == https://* ]]; then
-    USE_SSL=true
-    DOMAIN="${PUBLIC_BASE_URL#https://}"
-    log "Режим HTTPS, домен: $DOMAIN"
-else
-    log "Режим HTTP-only"
+DOCKER_CMD="docker"
+if ! docker info >/dev/null 2>&1; then
+    DOCKER_CMD="sudo docker"
 fi
 
-ask "Пароль PostgreSQL (Enter = оставить из shared.env):"
-read -r -s -p "DB_PASSWORD: " DB_PASSWORD_INPUT < /dev/tty
-echo ""
+set -a
+[ -f shared.env ] && source shared.env
+set +a
 
 ask "MAX Bot Token (Enter = оставить из shared.env):"
 read -r -s -p "MAX_BOT_TOKEN: " MAX_BOT_TOKEN_INPUT < /dev/tty
@@ -166,53 +139,33 @@ fi
 # -----------------------------------------------------------
 log "Создание директорий..."
 mkdir -p \
-    "$REPO_ROOT/data/postgres_data" \
-    "$REPO_ROOT/data/admin_db" \
-    "$REPO_ROOT/logs" \
-    "$REPO_ROOT/maps" \
-    "$REPO_ROOT/salut_bot/images" \
-    "$REPO_ROOT/salut_bot/embedding_models" \
-    "$REPO_ROOT/dsapi/local_models" \
-    "$REPO_ROOT/dsapi/logs" \
-    "$REPO_ROOT/dsapi/results"
+    data/postgres_data \
+    data/admin_db \
+    logs \
+    maps \
+    certbot/www \
+    certbot/conf \
+    salut_bot/images \
+    salut_bot/embedding_models \
+    salut_bot/knowledge_base_scripts/Vector/faiss_index \
+    dsapi/local_models \
+    dsapi/logs \
+    dsapi/results
 
-# -----------------------------------------------------------
-# 7. Скачивание ML-моделей
-# -----------------------------------------------------------
-echo ""
-ask "Скачать ML-модели сейчас? (salut_bot ~2.7GB + dsapi ~4.6GB)"
-ask "Можно пропустить и запустить позже: bash scripts/download_models.sh"
-read -r -p "Скачать? [y/N]: " DOWNLOAD_MODELS < /dev/tty
-if [[ "$DOWNLOAD_MODELS" =~ ^[Yy]$ ]]; then
-    log "Скачивание моделей (это займёт время)..."
-    bash "$REPO_ROOT/scripts/download_models.sh"
-else
-    warn "Пропущено. Перед запуском выполните: bash scripts/download_models.sh"
-fi
+chmod -R 777 data/admin_db logs maps dsapi/local_models dsapi/logs dsapi/results salut_bot/embedding_models 2>/dev/null || \
+    sudo chmod -R 777 data/admin_db logs maps dsapi/local_models dsapi/logs dsapi/results salut_bot/embedding_models
 
+echo "=== [4/6] Сборка Docker-образов ==="
+$DOCKER_CMD compose -f docker-compose.yml build
 # -----------------------------------------------------------
-# 8. Запуск сервисов
+# 9. Запуск PostgreSQL и Redis, ожидание готовности
 # -----------------------------------------------------------
-echo ""
-log "Запуск docker compose..."
-cd "$REPO_ROOT"
-docker compose up -d --build
+echo "=== [5/6] Запуск PostgreSQL (db) и Redis ==="
+$DOCKER_CMD compose up -d db redis
 
-# -----------------------------------------------------------
-# 9. Ожидание готовности backend и db
-# -----------------------------------------------------------
-log "Ожидание запуска backend..."
+echo "Ожидание готовности PostgreSQL..."
 RETRIES=30
-until docker compose exec -T backend python -c "import sys; sys.exit(0)" 2>/dev/null; do
-    RETRIES=$((RETRIES - 1))
-    [[ $RETRIES -le 0 ]] && die "backend не запустился за 60 секунд"
-    sleep 2
-done
-log "backend готов"
-
-log "Ожидание готовности PostgreSQL..."
-RETRIES=30
-until docker compose exec -T db pg_isready -U postgres -d eco >/dev/null 2>&1; do
+until $DOCKER_CMD compose exec -T db pg_isready -U "${DB_USER:-postgres}" -d "${DB_NAME:-eco}" >/dev/null 2>&1; do
     RETRIES=$((RETRIES - 1))
     [[ $RETRIES -le 0 ]] && die "PostgreSQL не запустился за 60 секунд"
     sleep 2
@@ -220,10 +173,10 @@ done
 log "PostgreSQL готов"
 
 # -----------------------------------------------------------
-# 9b. Инициализация таблиц Админ-панели
+# 9b. Инициализация таблиц Админ-панели (ИЗ HEAD)
 # -----------------------------------------------------------
 log "Создание таблиц для Админ-панели..."
-docker compose exec -T admin python -c "
+$DOCKER_CMD compose exec -T admin python -c "
 from sqlalchemy import create_engine
 from models.models import Base
 import os
@@ -234,50 +187,32 @@ Base.metadata.create_all(bind=engine)
 log "Таблицы Админ-панели готовы"
 
 # -----------------------------------------------------------
-# 9c. Включение pg_trgm для поиска
+# 9c. Включение pg_trgm для поиска (ИЗ HEAD)
 # -----------------------------------------------------------
 log "Включение расширения pg_trgm в PostgreSQL..."
-docker compose exec -T db psql -U postgres -d eco -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;" || warn "Не удалось включить pg_trgm."
+$DOCKER_CMD compose exec -T db psql -U postgres -d eco -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;" || warn "Не удалось включить pg_trgm."
 log "Расширение pg_trgm готово"
 
 # -----------------------------------------------------------
-# 10. Инициализация БД (База знаний)
+# 10. Запуск остальных сервисов и ожидание backend
 # -----------------------------------------------------------
-echo ""
-ask "Инициализировать БД начальными данными?"
-ask "(--full удаляет и пересоздаёт схему; пропустите если БД уже заполнена)"
-read -r -p "Инициализировать? [y/N]: " INIT_DB < /dev/tty
-if [[ "$INIT_DB" =~ ^[Yy]$ ]]; then
-    log "Генерация resources_deploy.json с адресом $PUBLIC_BASE_URL..."
-    sed "s|{{PUBLIC_BASE_URL}}|$PUBLIC_BASE_URL|g" \
-        "$REPO_ROOT/salut_bot/json_files/resources.json" \
-        > "$REPO_ROOT/salut_bot/json_files/resources_deploy.json"
+echo "=== [6/6] Запуск всех сервисов EcoAssistant ==="
+$DOCKER_CMD compose up -d
 
-    log "Запуск db_importer..."
-    docker compose exec -T backend bash -c "
-        cd knowledge_base_scripts/Relational &&
-        python -m db_importer.main --full \
-            --resources-file /app/json_files/resources_deploy.json
-    "
+echo "Ожидание готовности контейнера backend..."
+RETRIES=30
+until $DOCKER_CMD compose exec -T backend python -c "import sys; sys.exit(0)" 2>/dev/null; do
+    RETRIES=$((RETRIES - 1))
+    [[ $RETRIES -le 0 ]] && die "backend не запустился за 60 секунд"
+    sleep 2
+done
+log "backend готов"
 
-    rm -f "$REPO_ROOT/salut_bot/json_files/resources_deploy.json"
-    log "БД инициализирована"
-else
-    warn "Пропущено. Для инициализации позже:"
-    warn "  bash scripts/init_db.sh"
-fi
-
-# -----------------------------------------------------------
-# 11. Итог
-# -----------------------------------------------------------
+echo "=================================================================="
+echo "Развёртывание успешно завершено!"
+echo "Внутренний адрес (по IP): http://172.25.4.35/ecoassistant/admin/"
+echo "Внешний адрес (ИРНИТУ):   https://cloud-b.istu.edu/ecoassistant/admin/"
 echo ""
-log "========================================"
-log "  EcoBot установлен!"
-log "========================================"
-log "Адрес:       $PUBLIC_BASE_URL"
-log "AdminPanel:  $PUBLIC_BASE_URL/admin/"
-echo ""
-if grep -q "changeme\|your_.*_here\|your_sber_key" "$REPO_ROOT/shared.env" 2>/dev/null; then
-    warn "В shared.env остались незаполненные значения (changeme / your_*_here)"
-    warn "Отредактируйте shared.env и перезапустите: docker compose restart"
-fi
+echo "Если нужно скачать ML-модели (около 7 ГБ): bash scripts/download_models.sh"
+echo "Если нужно первично заполнить БД:          bash scripts/init_db.sh"
+echo "=================================================================="

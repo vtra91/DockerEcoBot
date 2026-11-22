@@ -70,6 +70,44 @@
         .btn-login:hover { background: #1d4ed8; }
         .footer-note { font-size: 0.78rem; color: #94a3b8; text-align: center; margin-top: 24px; }
     </style>
+
+<script id="ecoassistant-basepath-patch">
+(function() {
+    var bp = "{{ base_path | default('/ecoassistant') }}".replace(/\/+$/, "");
+    if (!bp || bp.indexOf("{") !== -1) bp = "/ecoassistant";
+    window.BASE_PATH = bp;
+
+    function fixUrl(u) {
+        if (typeof u !== "string") return u;
+        while (u.indexOf(bp + bp + "/") === 0) {
+            u = u.slice(bp.length);
+        }
+        if (u.startsWith("/") && !u.startsWith("//") && !u.startsWith(bp + "/") && u !== bp) {
+            return bp + u;
+        }
+        return u;
+    }
+
+    var origFetch = window.fetch;
+    if (origFetch) {
+        window.fetch = function(input, init) {
+            if (typeof input === "string") {
+                input = fixUrl(input);
+            } else if (input && typeof input.url === "string") {
+                input = new Request(fixUrl(input.url), input);
+            }
+            return origFetch.call(this, input, init);
+        };
+    }
+
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        arguments[1] = fixUrl(url);
+        return origOpen.apply(this, arguments);
+    };
+})();
+</script>
+
 </head>
 <body>
     <div class="login-wrapper">
@@ -102,7 +140,7 @@
             <div class="error-msg">Неверный логин или пароль</div>
             {% endif %}
 
-            <form action="/admin/login" method="post">
+            <form action="{{ ADMIN_PREFIX }}/login" method="post">
                 <div class="form-group">
                     <label>Логин</label>
                     <input type="text" name="username" placeholder="Введите логин" required autocomplete="username">

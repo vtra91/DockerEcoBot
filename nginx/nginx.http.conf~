@@ -1,0 +1,118 @@
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    access_log /dev/stdout;
+    error_log /dev/stderr notice;
+
+    sendfile        on;
+    keepalive_timeout 65;
+    client_max_body_size 50M;
+
+    map $http_x_forwarded_proto $real_scheme {
+        default $http_x_forwarded_proto;
+        ""      $scheme;
+    }
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        # 1. Защита от задвоения /ecoassistant/ecoassistant/
+        if ($request_uri ~ ^/ecoassistant/ecoassistant/(.*)$) {
+            return 302 $real_scheme://$http_host/ecoassistant/$1;
+        }
+
+        # 2. Если запрос пришёл напрямую с префиксом /ecoassistant/... (не срезан внешним прокси),
+        # срезаем его внутри Nginx, чтобы роутинг был единым:
+        rewrite ^/ecoassistant/?(.*)$ /$1 break;
+
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $real_scheme;
+        proxy_set_header X-Forwarded-Prefix /ecoassistant;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Accept-Encoding "";
+
+        # Автоматическая подстановка /ecoassistant в ссылки и формы HTML/JS, если в шаблоне указан /admin
+        sub_filter_types text/html text/css application/javascript;
+        sub_filter_once off;
+        sub_filter 'href="/admin' 'href="/ecoassistant/admin';
+        sub_filter "href='/admin" "href='/ecoassistant/admin";
+        sub_filter 'src="/admin' 'src="/ecoassistant/admin';
+        sub_filter "src='/admin" "src='/ecoassistant/admin";
+        sub_filter 'action="/admin' 'action="/ecoassistant/admin';
+        sub_filter "action='/admin" "action='/ecoassistant/admin";
+        sub_filter "fetch('/admin" "fetch('/ecoassistant/admin";
+        sub_filter 'fetch("/admin' 'fetch("/ecoassistant/admin';
+        sub_filter '`/admin/' '`/ecoassistant/admin/';
+        # Гарантия отсутствия задвоений
+        sub_filter '/ecoassistant/ecoassistant/' '/ecoassistant/';
+        sub_filter '/ecoassistant/ecoassistant"' '/ecoassistant"';
+
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        location /maps/ {
+            alias /var/www/maps/;
+            open_file_cache off;
+            expires -1;
+            add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+            autoindex off;
+        }
+
+        location /images/ {
+            alias /var/www/images/;
+            autoindex off;
+        }
+
+        location /search/ {
+            proxy_pass http://backend:8000/;
+        }
+
+        location /core-api/ {
+            proxy_pass http://core-api:5001/;
+        }
+
+        location /admin/static/ {
+            proxy_pass http://admin:8000;
+        }
+
+        location = /admin {
+            rewrite ^/admin$ / break;
+            proxy_pass http://admin:8000;
+            proxy_redirect ~^/ecoassistant/(.*)$ /ecoassistant/$1;
+            proxy_redirect ~^/admin/(.*)$ /ecoassistant/admin/$1;
+            proxy_redirect ~^/(?!ecoassistant/|admin/)(.*)$ /ecoassistant/admin/$1;
+        }
+
+        location /admin/ {
+            rewrite ^/admin/(.*)$ /$1 break;
+            proxy_pass http://admin:8000;
+            proxy_redirect ~^/ecoassistant/(.*)$ /ecoassistant/$1;
+            proxy_redirect ~^/admin/(.*)$ /ecoassistant/admin/$1;
+            proxy_redirect ~^/(?!ecoassistant/|admin/)(.*)$ /ecoassistant/admin/$1;
+            client_max_body_size 50M;
+            proxy_read_timeout 180s;
+            proxy_send_timeout 180s;
+        }
+
+        location / {
+            proxy_pass http://backend:8000;
+            proxy_read_timeout 180s;
+        }
+    }
+}

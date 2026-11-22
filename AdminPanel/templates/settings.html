@@ -104,9 +104,7 @@ block content %}
           <button
             type="button"
             class="btn btn-primary px-4 fw-bold"
-            onclick="
-              saveShared('form-prompts', '/admin/settings/prompts', 'instant')
-            "
+            onclick="saveShared('form-prompts', '{{ ADMIN_PREFIX }}/settings/prompts', 'instant')"
           >
             Сохранить промпты
           </button>
@@ -129,12 +127,12 @@ block content %}
             <div class="d-flex align-items-center gap-3 py-2">
               <div class="form-check form-switch mb-0">
                 <input
-                  class="form-check-input"
-                  type="checkbox"
-                  id="toggle-{{ field.key }}"
-                  style="width: 2.5em; height: 1.3em"
-                  {% if (field.key == "promo_enabled" and promo_enabled) or (field.key == "multi_act_dialog" and multi_act_enabled) %}checked{% endif %}
-                />
+  class="form-check-input"
+  type="checkbox"
+  id="toggle-{{ field.key }}"
+  style="width: 2.5em; height: 1.3em"
+  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) %}checked{% endif %}
+/>
                 <label
                   class="form-check-label fw-bold ms-1"
                   for="toggle-{{ field.key }}"
@@ -184,7 +182,7 @@ block content %}
           <button
             type="button"
             class="btn btn-primary px-4 fw-bold"
-            onclick="saveShared('form-{{ tab.id }}-instant', '/admin/settings/shared', 'instant')"
+            onclick="saveShared('form-{{ tab.id }}-instant', '{{ ADMIN_PREFIX }}/settings/shared', 'instant')"
           >
             Сохранить
           </button>
@@ -247,7 +245,7 @@ block content %}
           <button
             type="button"
             class="btn btn-warning px-4 fw-bold"
-            onclick="saveShared('form-{{ tab.id }}-restart', '/admin/settings/shared', 'restart', '{{ tab.restart_cmd }}')"
+            onclick="saveShared('form-{{ tab.id }}-restart', '{{ ADMIN_PREFIX }}/settings/shared', 'restart', '{{ tab.restart_cmd }}')"
           >
             Сохранить
           </button>
@@ -293,7 +291,7 @@ block content %}
     if (promoToggle) {
       promoToggle.addEventListener("change", async (e) => {
         try {
-          await fetch("/admin/chat/promo-setting", {
+          await fetch("{{ ADMIN_PREFIX }}/chat/promo-setting", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ enabled: e.target.checked }),

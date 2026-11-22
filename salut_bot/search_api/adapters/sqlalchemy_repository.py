@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 from sqlalchemy.orm import joinedload
 from sqlalchemy.dialects import postgresql
-from sqlalchemy import func, cast, text, String
+from sqlalchemy import func, cast, text, String, Boolean, Float
 from ..domain.entities import ObjectResult, ResourceResult, ObjectCriteria, ResourceCriteria
 from .search_repository import SearchRepository
 from ..infrastructure.orm.object_models import Object, ObjectNameSynonym, ObjectType
@@ -22,11 +22,11 @@ class SQLAlchemySearchRepository(SearchRepository):
         if not value or not isinstance(value, str):
             return query
         
-        json_field = Object.object_properties[key]
+        json_field_text = func.eco_assistant.prop_ci_text(Object.object_properties, key)
         pattern = r'\y' + re.escape(value).replace(r'\ ', '[ -]?').replace('-', '[ -]?') + r'\y'
         
         regex_condition = func.regexp_matches(
-            func.cast(json_field.as_string(), String),
+            func.cast(json_field_text, String),
             pattern, 'i'
         )
         
@@ -64,15 +64,15 @@ class SQLAlchemySearchRepository(SearchRepository):
                 for key, value in criteria.properties.items():
                     if key == 'subtypes' or key == 'Подтип объекта':
                         if isinstance(value, str):
-                            query = query.filter(Object.object_properties[key].op('?')(value))
+                            query = query.filter(func.eco_assistant.prop_ci(Object.object_properties, key).op('?')(value))
                         elif isinstance(value, list):
                             for item in value:
-                                query = query.filter(Object.object_properties[key].op('?')(item))
+                                query = query.filter(func.eco_assistant.prop_ci(Object.object_properties, key).op('?')(item))
                     elif key == 'exact_location' or key == 'Детальное расположение':
                         if isinstance(value, str):
                             pattern = r'\y' + re.escape(value).replace(r'\ ', '[ -]?').replace('-', '[ -]?') + r'\y'
                             query = query.filter(
-                                func.cast(Object.object_properties[key].as_string(), String).op('~*')(pattern)
+                                func.cast(func.eco_assistant.prop_ci_text(Object.object_properties, key), String).op('~*')(pattern)
                             )
                         elif isinstance(value, list):
                             from sqlalchemy import or_
@@ -80,21 +80,21 @@ class SQLAlchemySearchRepository(SearchRepository):
                             for item in value:
                                 pattern = r'\y' + re.escape(item).replace(r'\ ', '[ -]?').replace('-', '[ -]?') + r'\y'
                                 conditions.append(
-                                    func.cast(Object.object_properties[key].as_string(), String).op('~*')(pattern)
+                                    func.cast(func.eco_assistant.prop_ci_text(Object.object_properties, key), String).op('~*')(pattern)
                                 )
                             query = query.filter(or_(*conditions))
                     else:
                         if isinstance(value, str):
-                            query = query.filter(Object.object_properties[key].as_string().ilike(f"%{value}%"))
+                            query = query.filter(func.eco_assistant.prop_ci_text(Object.object_properties, key).ilike(f"%{value}%"))
                         elif isinstance(value, list):
                             for item in value:
-                                query = query.filter(Object.object_properties[key].as_string().ilike(f"%{item}%"))
+                                query = query.filter(func.eco_assistant.prop_ci_text(Object.object_properties, key).ilike(f"%{item}%"))
                         elif isinstance(value, bool):
-                            query = query.filter(Object.object_properties[key].as_boolean() == value)
+                            query = query.filter(cast(func.eco_assistant.prop_ci_text(Object.object_properties, key), Boolean) == value)
                         elif isinstance(value, (int, float)):
-                            query = query.filter(Object.object_properties[key].as_float() == value)
+                            query = query.filter(cast(func.eco_assistant.prop_ci_text(Object.object_properties, key), Float) == value)
                         else:
-                            query = query.filter(Object.object_properties[key].as_string().ilike(f"%{str(value)}%"))
+                            query = query.filter(func.eco_assistant.prop_ci_text(Object.object_properties, key).ilike(f"%{str(value)}%"))
             
             # COUNT before LIMIT/OFFSET
             count_query = query.with_entities(func.count(Object.id.distinct()))
@@ -269,8 +269,8 @@ class SQLAlchemySearchRepository(SearchRepository):
                 CROSS JOIN input_geom ig
                 WHERE m.modality_type = 'Геоданные'
                 AND {spatial_cond}
-                AND (o.object_properties->>'Подтип объекта' = ANY(:subtypes)
-                OR o.object_properties->'Подтип объекта' ?| :subtypes)
+                AND (eco_assistant.prop_ci_text(o.object_properties, 'Подтип объекта') = ANY(:subtypes)
+                OR eco_assistant.prop_ci(o.object_properties, 'Подтип объекта') ?| :subtypes)
                 GROUP BY o.id, ot.name, gv.geometry, ig.geom
                 ORDER BY distance
                 LIMIT :limit OFFSET :offset
@@ -337,13 +337,13 @@ class SQLAlchemySearchRepository(SearchRepository):
                     param_name = f"prop_{key.replace(' ', '_').replace('-', '_')}"
                     if isinstance(val, str):
                         base_conditions.append(
-                            f"o.object_properties->>'{key}' = :{param_name}"
+                            f"eco_assistant.prop_ci_text(o.object_properties, '{key}') = :{param_name}"
                         )
                         params[param_name] = val
                     elif isinstance(val, list):
                         items = "', '".join(val)
                         base_conditions.append(
-                            f"o.object_properties->'{key}' ?| ARRAY['{items}']"
+                            f"eco_assistant.prop_ci(o.object_properties, '{key}') ?| ARRAY['{items}']"
                         )
             
             base_where = " AND ".join(base_conditions) if base_conditions else "TRUE"

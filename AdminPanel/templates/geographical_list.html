@@ -8,7 +8,7 @@
     <p class="text-secondary mb-0" style="font-size:1.05rem; font-weight:500;">
         Управление достопримечательностями базы знаний
     </p>
-    <a href="/admin/geographical/new" class="btn-stats"
+    <a href="{{ ADMIN_PREFIX }}/geographical/new" class="btn-stats"
        style="background:#3b82f6; box-shadow:0 4px 6px rgba(59,130,246,0.2);">
         <i class="bi bi-plus-lg me-1"></i> Добавить
     </a>
@@ -105,7 +105,7 @@
                 <button class="btn btn-primary fw-bold flex-grow-1" style="border-radius:10px;"
                         onclick="applyFilters()">Найти</button>
                 {% if search or active_subtypes %}
-                <a href="/admin/geographical{% if filter_resources %}?filter_resources={{ filter_resources }}{% endif %}{% if sort_by and sort_by != 'default' %}{% if filter_resources %}&{% else %}?{% endif %}sort_by={{ sort_by }}{% endif %}"
+                <a href="{{ ADMIN_PREFIX }}/geographical{% if filter_resources %}?filter_resources={{ filter_resources }}{% endif %}{% if sort_by and sort_by != 'default' %}{% if filter_resources %}&{% else %}?{% endif %}sort_by={{ sort_by }}{% endif %}"
                    class="btn btn-outline-danger fw-bold" style="border-radius:10px;" title="Сбросить поиск">
                     <i class="bi bi-x-lg"></i>
                 </a>
@@ -208,7 +208,7 @@
 
                 <!-- Действие -->
                 <td class="td-act">
-                    <a href="/admin/geographical/{{ e.id }}" class="btn-details">Открыть</a>
+                    <a href="{{ ADMIN_PREFIX }}/geographical/{{ e.id }}" class="btn-details">Открыть</a>
                 </td>
             </tr>
             {% else %}
@@ -316,13 +316,13 @@ function buildParams() {
 
 function applyFilters() {
     // Любое применение фильтров сбрасывает страницу на первую
-    window.location.href = '/admin/geographical?' + buildParams().toString();
+    window.location.href = '{{ ADMIN_PREFIX }}/geographical?' + buildParams().toString();
 }
 
 function goToPage(p) {
     const params = buildParams();
     params.set('page', p);
-    window.location.href = '/admin/geographical?' + params.toString();
+    window.location.href = '{{ ADMIN_PREFIX }}/geographical?' + params.toString();
 }
 
 function removeSubtype(value) {

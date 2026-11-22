@@ -1,13 +1,17 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import all_routers
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from fastapi_app.routes import all_routers
+
+BASE_PATH = os.getenv("BASE_PATH", "/ecoassistant").rstrip("/")
 
 app = FastAPI(
-    title="SalutBot FastAPI",
-    description="Переписанный сервис на FastAPI",
-    version="0.1.0"
+    title="EcoAssistant Search API (Salut Bot)",
+    root_path=BASE_PATH,
 )
 
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,13 +20,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for router in all_routers:
-    app.include_router(router)
+for r in all_routers:
+    app.include_router(r)
 
-@app.get("/")
-async def home():
-    return {"message": "SalutBot FastAPI works!"}
 
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
+async def health_check():
+    return {"status": "ok", "base_path": BASE_PATH}

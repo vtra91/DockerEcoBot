@@ -103,6 +103,13 @@ async def main() -> None:
             logger.info(f"Режим webhook: {host}:{port}")
             path = os.getenv("MAX_WEBHOOK_PATH", "/")
             webhook_url = os.getenv("MAX_WEBHOOK_URL", "")
+            if not webhook_url:
+                # По умолчанию webhook = PUBLIC_BASE_URL (из shared.env, уже с префиксом
+                # вида /ecoassistant) + MAX_WEBHOOK_PATH. MAX принимает только https.
+                public_base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+                if public_base.startswith("https://"):
+                    webhook_url = f"{public_base}/{path.lstrip('/')}"
+            logger.info(f"Webhook URL: {webhook_url or '(не задан — подписка не выполняется)'}")
             webhook_secret = os.getenv("MAX_WEBHOOK_SECRET")
             if webhook_url:
                 await bot.subscribe_webhook(url=webhook_url, secret=webhook_secret)

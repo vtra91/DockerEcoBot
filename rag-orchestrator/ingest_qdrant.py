@@ -1,5 +1,7 @@
 import os
+import sys
 import psycopg2
+from datetime import datetime
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -9,44 +11,81 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
 MODEL_PATH = "/app/embedding_models/bge-m3"
 COLLECTION_NAME = "eco_objects"
+SYNC_FILE = "/app/state/last_sync.txt"
 
-print("Загрузка модели...")
-model = SentenceTransformer(MODEL_PATH)
-client = QdrantClient(host=QDRANT_HOST, port=6333)
+def run_ingestion(full_reindex=False):
+    print(f"Загрузка модели. Full reindex: {full_reindex}")
+    model = SentenceTransformer(MODEL_PATH)
+    client = QdrantClient(host=QDRANT_HOST, port=6333)
 
-conn = psycopg2.connect(host=DB_HOST, dbname="eco", user="postgres", password=DB_PASSWORD)
-cur = conn.cursor()
-# Берем 200 объектов для теста
-cur.execute("""
-    SELECT id, db_id, object_properties 
-    FROM eco_assistant.object 
-    WHERE object_properties != '{}'::jsonb 
-""")
-rows = cur.fetchall()
-conn.close()
+    # Читаем время последней синхронизации
+    last_sync = "1970-01-01 00:00:00+00"
+    if not full_reindex and os.path.exists(SYNC_FILE):
+        with open(SYNC_FILE, "r") as f:
+            last_sync = f.read().strip()
 
-points = []
-print(f"Найдено {len(rows)} объектов. Генерация эмбеддингов...")
-
-for r in rows:
-    obj_id, db_id, props = r
-    name = props.get("Вид (русское название)") or props.get("Вид (латинское название)") or props.get("Название") or "Без названия"
+    conn = psycopg2.connect(host=DB_HOST, dbname="eco", user="postgres", password=DB_PASSWORD)
+    cur = conn.cursor()
     
-    # Генерируем вектор
-    emb = model.encode(name, normalize_embeddings=True).tolist()
+    print(f"Ищем объекты, измененные после: {last_sync}")
+    cur.execute("""
+        SELECT id, db_id, object_properties, updated_at 
+        FROM eco_assistant.object 
+        WHERE object_properties != '{}'::jsonb 
+        AND updated_at > %s::timestamptz
+    """, (last_sync,))
     
-    points.append(models.PointStruct(
-        id=obj_id,
-        vector=emb,
-        payload={"db_id": db_id, "name": name, "object_type": props.get("Тип ОФФ")}
-    ))
+    rows = cur.fetchall()
+    conn.close()
 
-print(f"Заливка {len(points)} точек в Qdrant батчами...")
-BATCH_SIZE = 200  # Отправляем по 200 точек за раз
+    if not rows:
+        print("Нет новых или измененных объектов.")
+        return
 
-for i in range(0, len(points), BATCH_SIZE):
-    batch = points[i:i+BATCH_SIZE]
-    client.upsert(collection_name=COLLECTION_NAME, points=batch)
-    print(f"Загружено: {min(i + BATCH_SIZE, len(points))}/{len(points)}")
+    print(f"Найдено {len(rows)} объектов. Генерация эмбеддингов БАТЧАМИ...")
 
-print("Готово!")
+    ENCODE_BATCH = 64
+    UPSERT_BATCH = 200
+    points = []
+    max_updated_at = last_sync
+
+    for i in range(0, len(rows), ENCODE_BATCH):
+        batch_rows = rows[i:i+ENCODE_BATCH]
+        texts = []
+        for r in batch_rows:
+            props = r[2]
+            name = (props.get("Вид (русское название)") or 
+                    props.get("Вид (латинское название)") or 
+                    props.get("Название") or "Без названия")
+            texts.append(name)
+        
+        embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        
+        for (r, emb) in zip(batch_rows, embeddings):
+            obj_id, db_id, props, updated_at = r
+            name = (props.get("Вид (русское название)") or 
+                    props.get("Вид (латинское название)") or 
+                    props.get("Название") or "Без названия")
+            points.append(models.PointStruct(
+                id=obj_id,
+                vector=emb.tolist(),
+                payload={"db_id": db_id, "name": name, "object_type": props.get("Тип ОФФ")}
+            ))
+            if str(updated_at) > max_updated_at:
+                max_updated_at = str(updated_at)
+
+        print(f"Закодировано: {min(i + ENCODE_BATCH, len(rows))}/{len(rows)}")
+
+    print(f"Заливка {len(points)} векторов в Qdrant")
+    for i in range(0, len(points), UPSERT_BATCH):
+        client.upsert(collection_name=COLLECTION_NAME, points=points[i:i+UPSERT_BATCH])
+
+    # Сохраняем время последней синхронизации
+    with open(SYNC_FILE, "w") as f:
+        f.write(max_updated_at)
+    
+    print(f"Готово. Обновлено {len(points)} объектов. Последняя синхронизация: {max_updated_at}")
+
+if __name__ == "__main__":
+    full = "--full" in sys.argv
+    run_ingestion(full_reindex=full)

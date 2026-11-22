@@ -54,6 +54,7 @@ services:
       - PYTHONUNBUFFERED=1
       - DB_HOST=db
       - REDIS_HOST=redis
+      - RAG_ORCHESTRATOR_URL=http://rag-orchestrator:8000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [ecobot_net]
@@ -73,18 +74,18 @@ services:
     build:
       context: ./rag-orchestrator
       dockerfile: Dockerfile
+    env_file:
+      - ./shared.env
     environment:
-      DB_HOST: db
-      DB_PORT: "5432"
-      DB_NAME: eco
-      DB_USER: postgres
-      DB_PASSWORD: "Fdf78yh0a4b!"
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: "6333"
-      EMBEDDING_MODELS_BASE_DIR: /app/embedding_models
-      EMBEDDING_MODEL: bge-m3
+      - DB_HOST=db
+      - DB_PORT=5432
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - EMBEDDING_MODELS_BASE_DIR=/app/embedding_models
+      - EMBEDDING_MODEL=bge-m3
     volumes:
       - ./salut_bot/embedding_models:/app/embedding_models:ro
+      - ./data/rag_state:/app/state
     depends_on:
       - db
       - qdrant

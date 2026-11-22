@@ -7,10 +7,17 @@
     <p class="text-secondary mb-0" style="font-size:1.05rem; font-weight:500;">
         🌿 Управление объектами флоры базы знаний
     </p>
-    <a href="/admin/biological/new" class="btn-stats"
-       style="background:#059669; box-shadow:0 4px 6px rgba(5,150,105,0.2);">
-        <i class="bi bi-plus-lg me-1"></i> Добавить
-    </a>
+    <div class="d-flex gap-2">
+        <!-- Кнопка обновления индекса -->
+        <button id="btn-ingest" class="btn btn-outline-success fw-bold shadow-sm" style="border-radius: 10px;">
+            <i class="bi bi-arrow-repeat me-1"></i> Обновить индекс
+        </button>
+        <!-- Кнопка добавления -->
+        <a href="/admin/biological/new" class="btn-stats"
+           style="background:#059669; box-shadow:0 4px 6px rgba(5,150,105,0.2);">
+            <i class="bi bi-plus-lg me-1"></i> Добавить
+        </a>
+    </div>
 </div>
 
 <!-- Статбар -->
@@ -161,6 +168,29 @@ function buildParams() {
 function applyFilters() {
     window.location.href = '/admin/flora?' + buildParams().toString();
 }
+
+// === ОБНОВЛЕНИЕ ВЕКТОРНОГО ИНДЕКСА (QDRANT) ===
+document.getElementById('btn-ingest').addEventListener('click', async function() {
+    if (!confirm('Запустить обновление векторного индекса (Qdrant)? Это может занять пару минут.')) return;
+    
+    const btn = this;
+    const originalHtml = btn.innerHTML;
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Синхронизация...';
+    
+    try {
+        const resp = await fetch('http://localhost:8000/ingest', { method: 'POST' });
+        const data = await resp.json();
+        alert(data.message || 'Индексация запущена в фоне!');
+    } catch (e) {
+        alert('Ошибка подключения к RAG-сервису: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+});
+
 function goToPage(p) {
     const params = buildParams();
     params.set('page', p);

@@ -23,7 +23,7 @@ from search_api.infrastructure import RedisCache, init_db, get_session
 # get_session - функция для подключения сессии БД
 from search_api.adapters.sqlalchemy_repository import \
     SQLAlchemySearchRepository  # репозиторий для работы с БД через SQLAlchemy
-from search_api.adapters.vector_search_adapter import VectorSearchAdapter  # адаптер для векторго поиска (faiss)
+from search_api.adapters.rag_orchestrator_adapter import RagOrchestratorAdapter  # адаптер для RAG-оркестратора (Qdrant)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()  # экземпляр роутера (в него буду добавляться жндпоинты)
@@ -195,8 +195,7 @@ def _get_use_case():
     init_db(config)  # инициализация подключения к БД
     session_factory = get_session
     repository = SQLAlchemySearchRepository(session_factory)  # создание репозитория для работы с БД через SQLAlchemy
-    vector_search = VectorSearchAdapter(config.embedding_model_path,
-                                        config.faiss_index_path)  # создание адаптера для векторного поиска (загружает эмбеддинг-модель и индекс)
+    vector_search = RagOrchestratorAdapter()  # создание адаптера для RAG-оркестратора
     search_use_case = SearchUseCase(repository)
     search_use_case.set_vector_search(vector_search)
     geo_service = GeoMapService(config.maps_dir, config.domain)

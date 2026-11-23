@@ -216,6 +216,10 @@ services:
   dsapi:
     build:
       context: ./dsapi
+    # Выключен 20.11.2026: dsapi в проекте не используется (моделей нет, Ollama нет).
+    # Профиль не даёт ему стартовать при обычном "docker compose up -d".
+    # Включить вручную: docker compose --profile dsapi up -d dsapi
+    profiles: [dsapi]
     env_file:
       - ./dsapi/.env
     expose:

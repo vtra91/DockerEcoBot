@@ -184,7 +184,8 @@ endblock %} {% block content %}
         isDebug &&
         data.search &&
         data.search.debug &&
-        data.search.debug.llm_raw_json
+        data.search.debug.llm_raw_json &&
+        typeof renderRawLLM === "function"
       ) {
         renderRawLLM(data.search.debug.llm_raw_json);
       }
@@ -701,7 +702,12 @@ endblock %} {% block content %}
       });
       const data = await response.json();
       const isDebug = document.getElementById("setting-debug").checked;
-      if (isDebug && data.slots && data.slots._debug_llm_raw)
+      if (
+        isDebug &&
+        data.slots &&
+        data.slots._debug_llm_raw &&
+        typeof renderRawLLM === "function"
+      )
         renderRawLLM(data.slots._debug_llm_raw);
       if (isDebug && data.slots) renderClassification(data.slots);
       if (isDebug && data.search_request)

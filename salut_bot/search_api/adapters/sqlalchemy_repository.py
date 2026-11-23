@@ -66,8 +66,12 @@ class SQLAlchemySearchRepository(SearchRepository):
                         if isinstance(value, str):
                             query = query.filter(func.eco_assistant.prop_ci(Object.object_properties, key).op('?')(value))
                         elif isinstance(value, list):
-                            for item in value:
-                                query = query.filter(func.eco_assistant.prop_ci(Object.object_properties, key).op('?')(item))
+                            from sqlalchemy import or_
+                            or_conditions = [
+                                func.eco_assistant.prop_ci(Object.object_properties, key).op('?')(item)
+                                for item in value
+                            ]
+                            query = query.filter(or_(*or_conditions))
                     elif key == 'exact_location' or key == 'Детальное расположение':
                         if isinstance(value, str):
                             pattern = r'\y' + re.escape(value).replace(r'\ ', '[ -]?').replace('-', '[ -]?') + r'\y'
@@ -87,8 +91,12 @@ class SQLAlchemySearchRepository(SearchRepository):
                         if isinstance(value, str):
                             query = query.filter(func.eco_assistant.prop_ci_text(Object.object_properties, key).ilike(f"%{value}%"))
                         elif isinstance(value, list):
-                            for item in value:
-                                query = query.filter(func.eco_assistant.prop_ci_text(Object.object_properties, key).ilike(f"%{item}%"))
+                            from sqlalchemy import or_
+                            or_conditions = [
+                                func.eco_assistant.prop_ci_text(Object.object_properties, key).ilike(f"%{item}%")
+                                for item in value
+                            ]
+                            query = query.filter(or_(*or_conditions))
                         elif isinstance(value, bool):
                             query = query.filter(cast(func.eco_assistant.prop_ci_text(Object.object_properties, key), Boolean) == value)
                         elif isinstance(value, (int, float)):

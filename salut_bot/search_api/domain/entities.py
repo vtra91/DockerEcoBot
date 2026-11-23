@@ -55,6 +55,8 @@ class SearchRequest:
     modality_type: Optional[str] = None
     limit: int = 20
     offset: int = 0
+    resource_offset: int = 0
+    resource_limit: Optional[int] = None
     debug: bool = False
     search_type: str = "Relational"
     use_llm_answer: bool = False
@@ -94,3 +96,4 @@ class SearchResponse:
     total_objects: int = 0
     total_resources: int = 0
     pagination: Optional[Pagination] = None
+    resources_pagination: Optional[Pagination] = None

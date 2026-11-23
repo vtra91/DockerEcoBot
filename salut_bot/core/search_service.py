@@ -1,4 +1,5 @@
 import os
+import requests
 import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
@@ -30,7 +31,8 @@ class SearchService:
         self, 
         embedding_model_path: str,
         llm_service: Optional[Any] = None,
-        faiss_index_path: Optional[str] = None
+        faiss_index_path: Optional[str] = None,
+        rag_url = os.getenv("RAG_ORCHESTRATOR_URL", "http://rag-orchestrator:8000")
     ):
         """
         Args:
@@ -42,6 +44,11 @@ class SearchService:
         self.llm_service = llm_service
         self.relational_service = None  # Будет инициализирован позже
         self.geo_service = None  # Будет инициализирован позже
+#        self.embedding_model = HuggingFaceEmbeddings(
+#            model_name=embedding_model_path,
+#            model_kwargs={'device': 'cpu'},
+#            encode_kwargs={'normalize_embeddings': True}
+#        )
         # Модель эмбеддингов нужна только для векторного поиска (FAISS).
         # Если её нет на сервере (модели не скачаны), сервис стартует без векторного поиска.
         try:
@@ -151,6 +158,8 @@ class SearchService:
             logger.error(f"Ошибка загрузки resources_dist.json: {str(e)}")
 
     def load_faiss_index(self):
+        logger.info("FAISS отключён, используется RAG")
+        return None
         """Загружает FAISS индекс если он еще не загружен"""
         if self.faiss_vectorstore is not None:
             return self.faiss_vectorstore
@@ -354,74 +363,60 @@ class SearchService:
     def vector_search_fallback(self, query: str, object_type: str = "all",
                            similarity_threshold: float = 0.5, limit: int = 5,
                            rerank_top_k: int = 10) -> List[Dict]:
-        """
-        Fallback метод для векторного поиска с реранком (как в ноутбуке)
-
-        Args:
-            query: Поисковый запрос
-            object_type: Тип объекта для фильтрации
-            similarity_threshold: Порог схожести для FAISS
-            limit: Количество результатов после реранка (top-5)
-            rerank_top_k: Количество результатов из FAISS для реранка (top-20)
-
-        Returns:
-            Список найденных документов после реранка
-        """
-        faiss_results = self.search_in_faiss(
-            query=query,
-            k=rerank_top_k,
-            similarity_threshold=similarity_threshold
-        )
-
-        if not faiss_results:
-            logger.info("❌ FAISS fallback: нет результатов")
-            return []
-
-        logger.info(f"🔍 FAISS fallback: получено {len(faiss_results)} результатов для реранка")
-
         try:
-            reranker = self._load_reranker()
-            if reranker:
-                pairs = [[query, r['content']] for r in faiss_results]
-                rerank_scores = reranker.predict(pairs, batch_size=32)
-                reranked = sorted(zip(faiss_results, rerank_scores),
-                                key=lambda x: x[1], reverse=True)
-                reranked_results = [r for r, _ in reranked]
+            logger.info(f"RAG fallback: отправляем запрос в {self.rag_url}")
+            resp = requests.post(
+                f"{self.rag_url}/search",
+                json={"query": query, "top_k": rerank_top_k},
+                timeout=15
+            )
+            if resp.status_code != 200:
+                logger.error(f"RAG вернул {resp.status_code}: {resp.text}")
+                return []
 
-                logger.info(f"✅ Реранкер применил оценки к {len(reranked_results)} документам")
+            data = resp.json()
+            objects = data.get("objects", [])
 
-                if len(faiss_results) > 0 and len(reranked_results) > 0:
-                    logger.debug(f"  До реранка: {faiss_results[0]['object_name']} ({faiss_results[0]['similarity']:.4f})")
-                    logger.debug(f"  После реранка: {reranked_results[0]['object_name']}")
-            else:
-                logger.warning("⚠️ Реранкер не загружен, используем результаты FAISS без реранка")
-                reranked_results = faiss_results
+            results = []
+            for obj in objects:
+                results.append({
+                    "content": obj.get("name", ""),
+                    "similarity": obj.get("similarity", 0),
+                    "source": "rag_orchestrator",
+                    "object_name": obj.get("name", ""),
+                    "object_type": self._normalize_object_type(object_type),
+                    "feature_data": {"in_stoplist": 1, "source": "qdrant"},
+                    "metadata": {
+                        "db_id": obj.get("db_id"),
+                        "common_name": obj.get("name", ""),
+                        "resource_type": object_type
+                    }
+                })
+
+            logger.info(f"Векторный фолбек: получено {len(results)} результатов")
+
+            # Опционально: реранкер (если есть GPU и модель загружена)
+            if self._load_reranker() and results:
+                try:
+                    pairs = [[query, r['content']] for r in results]
+                    rerank_scores = self.reranker.predict(pairs, batch_size=32)
+                    reranked = sorted(zip(results, rerank_scores),
+                                    key=lambda x: x[1], reverse=True)
+                    results = [r for r, _ in reranked]
+                    logger.info(f"Реранкер пересортировал {len(results)}")
+                except Exception as e:
+                    logger.error(f"Ошибка реранка: {e}")
+
+            # Фильтрация по типу (если задан)
+            if object_type and object_type != "all" and object_type.lower() != "none":
+                target_type = self._normalize_object_type(object_type)
+                results = [r for r in results if r.get('object_type', '').lower() == target_type.lower()]
+
+            return results[:limit]
 
         except Exception as e:
-            logger.error(f"❌ Ошибка при реранке: {str(e)}")
-            reranked_results = faiss_results
-
-        if object_type and object_type != "all" and object_type.lower() != "none":
-            target_type = self._normalize_object_type(object_type)
-            filtered_by_type = []
-
-            for result in reranked_results:
-                result_type = result.get('object_type', '').lower()
-                if result_type == target_type.lower():
-                    filtered_by_type.append(result)
-                elif target_type.lower() == 'biological_entity' and result_type in ['biological_entity', 'объект флоры', 'объект фауны']:
-                    filtered_by_type.append(result)
-                elif target_type.lower() == 'geographical_entity' and result_type in ['geographical_entity', 'географический объект']:
-                    filtered_by_type.append(result)
-
-            reranked_results = filtered_by_type
-            logger.info(f"📊 После фильтрации по типу '{object_type}': {len(reranked_results)} результатов")
-
-        final_results = reranked_results[:limit]
-
-        logger.info(f"🎯 FAISS fallback: возвращаем {len(final_results)} результатов (порог: {similarity_threshold}, реранк: {rerank_top_k}->{limit})")
-
-        return final_results
+            logger.error(f"Ошибка vector fallback: {str(e)}")
+            return []
 
     def _load_object_synonyms(self):
         """Загружает синонимы объектов из JSON файла"""
@@ -670,6 +665,14 @@ class SearchService:
         if self.llm_service is None:
             self.llm_service = get_llm()   # используем фабрику
         return self.llm_service
+
+    def reload_llm(self) -> None:
+        """ Сбрасывает закэшированный LLM-клиент (вызывается из POST /reload).
+
+        SearchService — синглтон контейнера, llm_service кэшируется на инстансе,
+        поэтому без сброса после обновления env он остался бы на старом провайдере.
+        """
+        self.llm_service = None
 
     def _generate_llm_answer(self, question: str, context: str) -> Dict[str, Any]:
         """

@@ -1,4 +1,6 @@
 import os
+from dotenv import dotenv_values
+from aiohttp import web
 import asyncio
 import logging
 import aiohttp
@@ -6,6 +8,7 @@ import redis.asyncio as redis
 from dotenv import load_dotenv
 
 from utils.logging_config import setup_logging
+from infrastructure.config_reload import SHARED_ENV_PATH, apply_shared_env
 from infrastructure.max_bot.setup import bot, dp
 from infrastructure.max_bot.context import ctx
 from application.search.slot_classifier import SlotClassifier
@@ -23,17 +26,42 @@ logger = logging.getLogger("MaxBotApp")
 
 _SHARED_ENV_PATH = "/app/shared.env"
 
-logger.info(f"=== DEBUG: LLM_PROVIDER = {os.getenv('LLM_PROVIDER', 'DEFAULT: qwen')} ===")
-logger.info(f"=== DEBUG: LLM_BASE_URL = {os.getenv('LLM_BASE_URL', 'DEFAULT: http://host.docker.internal:11434/v1')} ===")
+def reload_runtime_config():
+    """ Читает shared.env и обновляет LLM-переменные в памяти процесса."""
+    report = apply_shared_env(SHARED_ENV_PATH)
+    if report["error"]:
+        logger.error(f"[RELOAD] {report['error']}")
+        return report
+
+    if hasattr(ctx, "classifier") and ctx.classifier:
+        # Обязательно: без сброса парсера env обновится, а клиент останется старый.
+        ctx.classifier.reload()
+
+    logger.info(
+        "[RELOAD] Конфиг перезагружен. Провайдер: %s (применено: %s)",
+        os.getenv("LLM_PROVIDER"),
+        ", ".join(sorted(report["applied"])) or "без изменений",
+    )
+    return report
+
+async def handle_reload(request):
+    """Эндпоинт для приема сигнала от админки"""
+    try:
+        reload_runtime_config()
+        return web.json_response({"status": "ok", "provider": os.environ.get('LLM_PROVIDER')})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
 
 async def _config_reload_listener() -> None:
     pubsub = ctx.redis_client.pubsub()
     await pubsub.subscribe("config:reload")
     async for msg in pubsub.listen():
         if msg["type"] == "message":
-            load_dotenv(_SHARED_ENV_PATH, override=True)
-            ctx.classifier.reload()
-            logger.info("Конфиг LLM перезагружен через Redis сигнал")
+            #  reload_runtime_config() уже делает и env, и classifier.reload().
+            #  Дублирующий load_dotenv(override=True) убран намеренно: он затирал
+            #  ECOBOT_API_BASE_URL значением из shared.env.
+            reload_runtime_config()
 
 
 async def main() -> None:
@@ -85,6 +113,12 @@ async def main() -> None:
             webhook_secret = os.getenv("MAX_WEBHOOK_SECRET")
             if webhook_url:
                 await bot.subscribe_webhook(url=webhook_url, secret=webhook_secret)
+            if hasattr(dp, 'app') and dp.app:
+                dp.app.router.add_post('/reload', handle_reload)
+            elif hasattr(dp, 'web_app') and dp.web_app:
+                dp.web_app.router.add_post('/reload', handle_reload)
+            else:
+                logger.warning("Не удалось добавить роут /reload. Проверьте структуру maxapi.")
             await dp.handle_webhook(bot=bot, host=host, port=port, path=path, secret=webhook_secret)
         else:
             logger.info("Режим polling")

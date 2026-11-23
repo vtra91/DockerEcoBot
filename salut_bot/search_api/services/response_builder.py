@@ -31,6 +31,8 @@ class ResponseBuilder:
             'modality_filter': search_response.modality_filter,
             'objects': self._serialize_objects(search_response.objects),
             'resources': self._serialize_resources(search_response.resources, search_response.objects),
+            'total_objects': search_response.total_objects,
+            'total_resources': search_response.total_resources,
         }
         if search_response.pagination:
             result['pagination'] = {
@@ -39,6 +41,14 @@ class ResponseBuilder:
                 'offset': search_response.pagination.offset,
                 'next_offset': search_response.pagination.next_offset,
                 'has_more': search_response.pagination.has_more,
+            }
+        if search_response.resources_pagination:
+            result['resources_pagination'] = {
+                'total': search_response.resources_pagination.total,
+                'limit': search_response.resources_pagination.limit,
+                'offset': search_response.resources_pagination.offset,
+                'next_offset': search_response.resources_pagination.next_offset,
+                'has_more': search_response.resources_pagination.has_more,
             }
         if search_response.debug_info:
             result['debug'] = search_response.debug_info

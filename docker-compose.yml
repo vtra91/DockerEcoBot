@@ -51,15 +51,53 @@ services:
       - ./salut_bot/embedding_models:/app/embedding_models
       - ./salut_bot/knowledge_base_scripts/Vector/faiss_index:/app/knowledge_base_scripts/Vector/faiss_index
       - ./logs:/app/logs
+      - ./shared.env:/app/shared.env:ro
       - ./salut_bot/search_api/services/geo_map_service.py:/app/search_api/services/geo_map_service.py:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DB_HOST=db
       - REDIS_HOST=redis
+      - RAG_ORCHESTRATOR_URL=http://rag-orchestrator:8000
       - BASE_PATH=${BASE_PATH:-/ecoassistant}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [ecobot_net]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    networks:
+      - ecobot_net
+    restart: always
+
+  rag-orchestrator:
+    build:
+      context: ./rag-orchestrator
+      dockerfile: Dockerfile
+    env_file:
+      - ./shared.env
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - EMBEDDING_MODELS_BASE_DIR=/app/embedding_models
+      - EMBEDDING_MODEL=bge-m3
+    volumes:
+      - ./salut_bot/embedding_models:/app/embedding_models:ro
+      - ./data/rag_state:/app/state
+    depends_on:
+      - db
+      - qdrant
+    networks:
+      - ecobot_net
+    restart: always
+    ports:
+      - "8000:8000"
 
   core-api:
     build: ./EcoBotProject/DialogService
@@ -67,6 +105,8 @@ services:
     env_file:
       - ./EcoBotProject/DialogService/.env
       - ./shared.env
+    volumes:
+      - ./shared.env:/app/shared.env:ro
     command: python api.py
     environment:
       - PYTHONUNBUFFERED=1
@@ -94,6 +134,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./shared.env:/app/shared.env:ro
       - ./EcoBotProject/DialogService/adapters/max/presenter.py:/app/adapters/max/presenter.py:ro
     command: python main_max.py
     expose:
@@ -175,6 +216,10 @@ services:
   dsapi:
     build:
       context: ./dsapi
+    # Выключен 20.11.2026: dsapi в проекте не используется (моделей нет, Ollama нет).
+    # Профиль не даёт ему стартовать при обычном "docker compose up -d".
+    # Включить вручную: docker compose --profile dsapi up -d dsapi
+    profiles: [dsapi]
     env_file:
       - ./dsapi/.env
     expose:

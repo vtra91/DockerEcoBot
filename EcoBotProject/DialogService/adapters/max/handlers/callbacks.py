@@ -40,6 +40,24 @@ def register_callback_handlers(dp: Dispatcher, bot: Bot) -> None:
             await bot.send_message(chat_id=chat_id, text=STAND_DISCONNECTED)
             return
 
+        # ── Продолжение прошлого ответа («Покажи ещё») ───────────────────────
+        if payload == "more:next":
+            try:
+                await bot.send_action(chat_id=chat_id, action="typing_on")
+            except Exception:
+                pass
+            try:
+                result = await ctx.orchestrator.continue_previous(user_id)
+                if not result:
+                    await bot.send_message(chat_id=chat_id, text=ERR_SEARCH_OUTDATED)
+                    return
+                await render_pipeline_result(bot, chat_id, result, ctx.session)
+            except Exception as e:
+                logger.error(f"More callback error [{chat_id}]: {e}", exc_info=True)
+                await log_critical(ctx.session, payload, user_id, e)
+                await bot.send_message(chat_id=chat_id, text=ERR_GENERIC)
+            return
+
         # ── Упрощение поиска (Сценарий 4) ────────────────────────────────────
         if payload.startswith("simplify:"):
             idx_str = payload.removeprefix("simplify:")
@@ -82,7 +100,12 @@ def register_callback_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         try:
             promo_val = await ctx.redis_client.get("settings:promo_enabled")
-            result = await ctx.orchestrator.process(query, user_id=user_id, promo_enabled=promo_val != "0")
+            multi_act_val = await ctx.redis_client.get("settings:multi_act_dialog")
+            result = await ctx.orchestrator.process(
+                query, user_id=user_id,
+                promo_enabled=promo_val != "0",
+                multi_act_enabled=multi_act_val != "0",
+            )
             await render_pipeline_result(bot, chat_id, result, ctx.session)
         except Exception as e:
             logger.error(f"Callback pipeline error [{chat_id}]: {e}", exc_info=True)

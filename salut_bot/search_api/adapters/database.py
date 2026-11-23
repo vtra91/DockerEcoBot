@@ -3,7 +3,7 @@ import logging
 import psycopg2
 import json
 from psycopg2.extras import RealDictCursor
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from ..config import SearchConfig
 from ..domain.entities import ObjectResult, ResourceResult, ObjectCriteria, ResourceCriteria
 from .search_repository import SearchRepository

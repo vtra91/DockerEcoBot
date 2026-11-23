@@ -60,6 +60,8 @@ class SearchAndBuildUseCase:
             'modality_type': request.modality_type,
             'limit': request.limit,
             'offset': request.offset,
+            'resource_offset': request.resource_offset,
+            'resource_limit': request.resource_limit,
             'use_llm': request.use_llm_answer,
             'user_query': request.user_query,
             'clean_user_query': request.clean_user_query,

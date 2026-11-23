@@ -3,6 +3,8 @@ from pathlib import Path
 from fastapi import APIRouter, Body, Request
 from dotenv import dotenv_values, set_key, load_dotenv
 
+from infrastructure.config_reload import SHARED_ENV_PATH, apply_shared_env
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -44,9 +46,19 @@ async def update_config(data: dict = Body(...)):
 
 @router.post("/reload")
 async def reload_config(request: Request):
-    load_dotenv(str(ENV_PATH), override=True)
-    if SHARED_ENV_PATH.exists():
-        load_dotenv(str(SHARED_ENV_PATH), override=True)
+    """ Применяет новый LLM-конфиг в РАБОТАЮЩЕМ процессе core-api."""
+    # Локальный .env сервиса перечитываем как раньше.
+    if ENV_PATH.exists():
+        load_dotenv(str(ENV_PATH), override=True)
+
+    report = apply_shared_env(SHARED_ENV_PATH)
+
+    # Сигнал остальным контейнерам (его слушает max). fire-and-forget.
     await request.app.state.redis.publish("config:reload", "1")
+
+    if report["error"]:
+        logger.error("Конфиг перезагружен частично: %s", report["error"])
+        return {"status": "error", "message": report["error"], "report": report}
+
     logger.info("Конфиг перезагружен, сигнал отправлен в Redis")
-    return {"status": "success", "message": "Конфиг применён"}
+    return {"status": "success", "message": "Конфиг применён", "report": report}

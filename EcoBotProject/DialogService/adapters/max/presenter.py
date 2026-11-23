@@ -37,8 +37,9 @@ async def render_pipeline_result(
     modality_ambiguous: bool = pipeline_result.get("modality_ambiguous", False)
     simplifications: list = pipeline_result.get("simplifications") or []
     slots: dict = pipeline_result.get("slots") or {}
+    more: dict = result.get("more") or {}
 
-    # --------------Блок прерывания отправки текстовых сообщений когда есть фото---------------
+      # --------------Блок прерывания отправки текстовых сообщений когда есть фото---------------
     # Если в ответе есть изображение, присылаем только их
     if images:
         for url in images[:_MAX_IMAGES]:
@@ -51,20 +52,22 @@ async def render_pipeline_result(
                     )
                 except Exception as e:
                     logger.error(f"Image send failed: {e}")
+
+        if more.get("has_more") or (result.get("is_more_page") and more.get("note")):
+            more_builder = InlineKeyboardBuilder()
+            if more.get("has_more"):
+                more_builder.row(CallbackButton(text="Покажи ещё", payload="more:next"))
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=more.get("note") or "",
+                    attachments=[more_builder.as_markup()] if more.get("has_more") else None,
+                )
+            except Exception as e:
+                logger.error(f"More button send failed: {e}")
+
         return
 
-    #for url in images[:_MAX_IMAGES]:
-    #    data = await _fetch_image(session, url)
-    #    if data:
-    #        try:
-    #            await bot.send_message(
-    #                chat_id=chat_id,
-    #                attachments=[InputMediaBuffer(buffer=data, filename="photo.jpg")],
-    #            )
-    #        except Exception as e:
-    #            logger.error(f"Image send failed: {e}")
-
-    # Если фото нет, отправляем текстовое сообщение
     builder = InlineKeyboardBuilder()
     has_buttons = False
     # ----------------------------------------------------------------------------------
@@ -109,6 +112,11 @@ async def render_pipeline_result(
             text="🗺 Показать на карте",
             payload=f"map:{slots['synonym'][:50]}",
         ))
+        has_buttons = True
+
+    # ── Продолжение прошлого ответа ───────────────────────────────────────────
+    if more.get("has_more"):
+        builder.row(CallbackButton(text="Покажи ещё", payload="more:next"))
         has_buttons = True
 
     # ── Текст ответа ──────────────────────────────────────────────────────────

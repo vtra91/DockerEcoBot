@@ -48,5 +48,6 @@ def register_command_handlers(dp: Dispatcher, bot: Bot) -> None:
 
     @dp.message_created(Command("help"))
     async def handle_help(event: MessageCreated) -> None:
+        logger.warning("=== ХЕНДЛЕР /help ВЫЗВАН ===")
         chat_id = event.message.recipient.chat_id
         await bot.send_message(chat_id=chat_id, text=HELP_TEXT)

@@ -1,6 +1,5 @@
 import os
 import re
-import random
 import logging
 import aiohttp
 from typing import Any, Dict, List, Optional
@@ -20,8 +19,10 @@ class _ApiError(Exception):
 
 _NEAR_RE = re.compile(r"рядом|около|возле|недалеко|поблизости|близ", re.IGNORECASE)
 
-# Сколько фото отдавать в ответе (случайная выборка после фильтрации)
 IMAGES_PER_ANSWER = 3
+IMAGE_PAGE_SIZE = IMAGES_PER_ANSWER
+TEXT_PAGE_SIZE = 1
+OBJECT_PAGE_SIZE = 20
 
 _LOCATION_KEYS = frozenset({"Детальное расположение", "Расположение относительно Байкала"})
 
@@ -62,13 +63,38 @@ class SlotSearchExecutor:
         self._promo_enabled = os.getenv("PROMO_ENABLED", "false").lower() == "true"
         self._promo_relation_type = os.getenv("PROMO_RELATION_TYPE", "promo")
 
-    async def execute(self, query: str, slots: Dict[str, Any], user_id: str | None = None, promo_enabled: bool | None = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def execute(
+        self,
+        query: str,
+        slots: Dict[str, Any],
+        user_id: str | None = None,
+        promo_enabled: bool | None = None,
+        context: Optional[Dict[str, Any]] = None,
+        *,
+        object_offset: int = 0,
+        object_limit: int | None = None,
+        resource_offset: int = 0,
+        resource_limit: int | None = None,
+        use_llm_answer: bool | None = None,
+        include_resources: bool = True,
+    ) -> Dict[str, Any]:
         try:
             if self._use_place_endpoint(slots):
-                search_body = self._build_place_params(slots, query)
+                search_body = self._build_place_params(
+                    slots, query, offset=object_offset, limit=object_limit
+                )
                 search_data = await self._call_place(search_body)
             else:
-                search_body = self._build_search_params(slots, query)
+                search_body = self._build_search_params(
+                    slots,
+                    query,
+                    object_offset=object_offset,
+                    object_limit=object_limit,
+                    resource_offset=resource_offset,
+                    resource_limit=resource_limit,
+                    use_llm_answer=use_llm_answer,
+                    include_resources=include_resources,
+                )
                 search_data = await self._call_search(search_body)
         except _ApiError as e:
             if user_id and self._session:
@@ -76,18 +102,23 @@ class SlotSearchExecutor:
                     self._session, user_id, e.url, e.status, e.response_text, query,
                     context=context, payload=e.payload,
                 )
-            return {"slots": slots, "search_request": {}, "search": {}, "result": {"answer": "Сервис временно недоступен. Попробуйте позже."}}
+            return {"slots": slots, "search_request": {}, "search": {}, "result": {"answer": "Сервис временно недоступен. Попробуйте позже.", "error": True}}
 
         if user_id and is_stand_session_active(user_id):
             await self._send_to_stand(search_data)
 
         promo_objects = []
         use_promo = promo_enabled if promo_enabled is not None else self._promo_enabled
-        # Не показываем промо если запрос уже является переходом по промо-ссылке
         if use_promo and not slots.get("promo_db_id"):
             promo_objects = await self._fetch_promo(search_data.get("objects") or [], query)
 
-        result = self._format_result(slots, search_data, promo_objects)
+        result = self._format_result(
+            slots,
+            search_data,
+            promo_objects,
+            object_offset=object_offset,
+            resource_offset=resource_offset,
+        )
 
         if user_id and self._session and self._is_zero_result(slots, result, search_data):
             await log_zero_results(
@@ -155,41 +186,51 @@ class SlotSearchExecutor:
 
     # ── Форматирование результата ─────────────────────────────────────────────
 
-    def _format_result(self, slots: Dict[str, Any], search_data: dict, promo_objects: list = None) -> dict:
+    def _format_result(
+        self,
+        slots: Dict[str, Any],
+        search_data: dict,
+        promo_objects: list = None,
+        *,
+        object_offset: int = 0,
+        resource_offset: int = 0,
+    ) -> dict:
         llm = search_data.get("llm_answer") or {}
         llm_raw = (llm.get("content") or "").strip() if isinstance(llm, dict) else ""
 
         resources: List[dict] = search_data.get("resources") or []
-        text_res  = [r for r in resources if r.get("modality_type") == "Текст"]
+        text_res = [r for r in resources if r.get("modality_type") == "Текст"]
         image_res = [r for r in resources if r.get("modality_type") == "Изображение"]
-        geo_res   = [r for r in resources if r.get("modality_type") == "Геоданные"]
+        geo_res = [r for r in resources if r.get("modality_type") == "Геоданные"]
 
         objects: List[dict] = search_data.get("objects") or []
 
         result: dict = {}
+        text_title = ""
 
-        # ── Текст ──
         if llm_raw:
             result["answer"] = self._clean_text(llm_raw)
         elif text_res:
-            result["answer"] = self._extract_text(text_res[0])
+            extracted = self._extract_text(text_res[0])
+            if extracted:
+                result["answer"] = extracted
+                text_title = text_res[0].get("title") or ""
+            elif not objects:
+                result["answer"] = "По вашему запросу ничего не найдено."
         elif not objects:
             result["answer"] = "По вашему запросу ничего не найдено."
 
-        # ── Изображения ──
         images = []
         for r in image_res:
             content = r.get("content")
             if not isinstance(content, dict):
                 continue
-            # стоп-лист: такие фото не показываем
             if int((r.get("features") or {}).get("В стоп-листе") or 0):
                 continue
             url = content.get("file_path") or content.get("url")
             if not url or url in images:
                 continue
             images.append(url)
-        # fallback: если стоп-лист отсёк ВСЁ — показываем что есть, чтобы не отдавать пустоту
         if not images:
             logger.warning("All images are stop-listed — fallback to unfiltered")
             for r in image_res:
@@ -199,15 +240,11 @@ class SlotSearchExecutor:
                 url = content.get("file_path") or content.get("url")
                 if url and url not in images:
                     images.append(url)
-        # ── ВЫБОР ФОТО: активным должен быть РОВНО ОДИН вариант ──
-        # Вариант A — фиксированные первые 3 (старое поведение, порядок из БД):
-        # if images:
-        #     result["images"] = images[:IMAGES_PER_ANSWER]
-        # Вариант B — случайные 3 (новое поведение):
         if images:
-            result["images"] = random.sample(images, min(IMAGES_PER_ANSWER, len(images)))
+            result["images"] = images[:IMAGE_PAGE_SIZE]
+        if text_title:
+            result["text_title"] = text_title
 
-        # ── Карта из geo-ресурсов (/search) ──
         for r in geo_res:
             raw_links = (r.get("content") or {}).get("map_links")
             logger.debug(f"map_links raw: {raw_links!r}")
@@ -216,7 +253,6 @@ class SlotSearchExecutor:
                 logger.info(f"map normalized: {result['map']}")
                 break
 
-        # ── Карта из свойств объектов (place-поиск) ──
         if "map" not in result:
             for obj in objects:
                 props = obj.get("properties") or {}
@@ -230,7 +266,6 @@ class SlotSearchExecutor:
         if "map" not in result:
             logger.info(f"map: не найдено (geo_res={len(geo_res)}, objects={len(objects)})")
 
-        # ── Найденные объекты ──
         if objects:
             result["objects"] = [
                 {
@@ -241,13 +276,11 @@ class SlotSearchExecutor:
                 for obj in objects
             ]
 
-        # ── Мета place-поиска ──
         if "total_objects" in search_data:
             result["total_found"] = search_data["total_objects"]
         if "place_name" in search_data:
             result["place"] = search_data["place_name"]
 
-        # ── Промо: связанные услуги/экспозиции ──
         if promo_objects:
             result["promo"] = [
                 {
@@ -259,7 +292,108 @@ class SlotSearchExecutor:
                 for obj in promo_objects
             ]
 
+        result["more"] = self._build_more(
+            search_data=search_data,
+            result=result,
+            text_res=text_res,
+            objects=objects,
+            llm_raw=llm_raw,
+            object_offset=object_offset,
+            resource_offset=resource_offset,
+        )
+
         return result
+
+    def _build_more(
+        self,
+        *,
+        search_data: dict,
+        result: dict,
+        text_res: List[dict],
+        objects: List[dict],
+        llm_raw: str,
+        object_offset: int,
+        resource_offset: int,
+    ) -> dict | None:
+        res_page = search_data.get("resources_pagination") or {}
+        obj_page = search_data.get("pagination") or {}
+        total_resources = int(search_data.get("total_resources") or res_page.get("total") or 0)
+
+        if not search_data.get("object_criteria") and "place_name" not in search_data:
+            return None
+
+        object_limit = int(obj_page.get("limit") or OBJECT_PAGE_SIZE)
+        object_has_more = bool(obj_page.get("has_more"))
+        next_object_offset = int(
+            obj_page.get("next_offset")
+            or (max(0, object_offset) + object_limit)
+        )
+
+        images = result.get("images") or []
+        if images:
+            batch = len(images)
+            total = int(res_page.get("total") or total_resources or batch)
+            shown = max(0, resource_offset) + batch
+            start = max(1, shown - batch + 1)
+            return {
+                "kind": "images",
+                "shown": shown,
+                "total": total,
+                "batch": batch,
+                "has_more": (shown < total) or object_has_more,
+                "next_resource_offset": shown,
+                "object_offset": max(0, object_offset),
+                "object_limit": object_limit,
+                "object_has_more": object_has_more,
+                "next_object_offset": next_object_offset,
+                "note": f"Показаны изображения {start}–{shown} из {total}.",
+            }
+
+        if text_res:
+            if llm_raw and resource_offset <= 0:
+                shown = 0
+            else:
+                shown = max(0, resource_offset) + 1
+            total = int(res_page.get("total") or total_resources or len(text_res))
+            note = ""
+            if resource_offset > 0:
+                note = f"Дополнительная информация, фрагмент {shown} из {total}."
+            return {
+                "kind": "text",
+                "shown": shown,
+                "total": total,
+                "batch": 0,
+                "has_more": (shown < total) or object_has_more,
+                "next_resource_offset": shown,
+                "object_offset": max(0, object_offset),
+                "object_limit": object_limit,
+                "object_has_more": object_has_more,
+                "next_object_offset": next_object_offset,
+                "note": note,
+            }
+
+        if objects:
+            total = int(obj_page.get("total") or search_data.get("total_objects") or len(objects))
+            shown = max(0, object_offset) + len(objects)
+            has_more = object_has_more if obj_page else (shown < total)
+            note = ""
+            if object_offset > 0:
+                note = f"Показаны объекты {max(1, object_offset + 1)}–{shown} из {total}."
+            return {
+                "kind": "place" if "place_name" in search_data else "objects",
+                "shown": shown,
+                "total": total,
+                "batch": len(objects),
+                "has_more": has_more,
+                "next_object_offset": shown,
+                "object_offset": max(0, object_offset),
+                "object_limit": object_limit,
+                "object_has_more": has_more,
+                "next_resource_offset": 0,
+                "note": note,
+            }
+
+        return None
 
     @staticmethod
     def _clean_text(text: str) -> str:
@@ -272,14 +406,36 @@ class SlotSearchExecutor:
 
     @staticmethod
     def _extract_text(resource: dict) -> str:
-        """Извлекает текст из структуры контента текстового ресурса."""
         c = resource.get("content") or {}
-        if isinstance(c, dict):
-            sd = c.get("structured_data") or {}
-            if isinstance(sd, dict):
-                return (sd.get("content") or sd.get("text") or "").strip()
-            return (c.get("text") or c.get("content") or "").strip()
-        return str(c).strip()
+        if not isinstance(c, dict):
+            return str(c).strip()
+
+        sd = c.get("structured_data") or {}
+        if not isinstance(sd, dict):
+            return str(sd).strip()
+
+        direct = sd.get("content") or sd.get("text")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+
+        parts: list[str] = []
+        seen: set[str] = set()
+
+        def walk(value) -> None:
+            if isinstance(value, dict):
+                for child in value.values():
+                    walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+            elif isinstance(value, str):
+                text = value.strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    parts.append(text)
+
+        walk(sd)
+        return "\n\n".join(parts).strip()
 
     # ── Роутинг ───────────────────────────────────────────────────────────────
 
@@ -294,7 +450,14 @@ class SlotSearchExecutor:
 
     # ── Геопоиск по месту (/search/place/objects) ─────────────────────────────
 
-    def _build_place_params(self, slots: Dict[str, Any], user_query: str) -> dict:
+    def _build_place_params(
+        self,
+        slots: Dict[str, Any],
+        user_query: str,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> dict:
         props = slots.get("properties") or {}
         is_baikal = bool(props.get("Расположение относительно Байкала"))
 
@@ -307,8 +470,8 @@ class SlotSearchExecutor:
         body: dict = {
             "place_name": place_name,
             "buffer_radius_km": buffer_km,
-            "limit": 20,
-            "offset": 0,
+            "limit": limit or OBJECT_PAGE_SIZE,
+            "offset": offset,
             "search_type": search_type,
         }
 
@@ -360,8 +523,22 @@ class SlotSearchExecutor:
             return [SlotSearchExecutor._strip_nulls(i) for i in obj if i is not None]
         return obj
 
-    def _build_search_params(self, slots: Dict[str, Any], user_query: str) -> dict:
+    def _build_search_params(
+        self,
+        slots: Dict[str, Any],
+        user_query: str,
+        *,
+        object_offset: int = 0,
+        object_limit: int | None = None,
+        resource_offset: int = 0,
+        resource_limit: int | None = None,
+        use_llm_answer: bool | None = None,
+        include_resources: bool = True,
+    ) -> dict:
         search_params = {}
+
+        if resource_limit is None and slots.get("modality") == "Изображение":
+            resource_limit = IMAGE_PAGE_SIZE
 
         obj = {}
         synonym = slots.get("synonym")
@@ -409,13 +586,28 @@ class SlotSearchExecutor:
         else:
             effective_query = user_query
 
+        if use_llm_answer is None:
+            use_llm = slots.get("modality") != "Изображение"
+        else:
+            use_llm = use_llm_answer
+
+        system_parameters: dict = {
+            "debug": True,
+            "user_query": effective_query,
+            "clean_user_query": effective_query,
+            "use_llm_answer": use_llm,
+            "limit": object_limit or OBJECT_PAGE_SIZE,
+            "offset": object_offset,
+        }
+        if resource_offset:
+            system_parameters["resource_offset"] = resource_offset
+        if not include_resources:
+            system_parameters["resource_limit"] = 0
+        elif resource_limit is not None:
+            system_parameters["resource_limit"] = resource_limit
+
         return {
-            "system_parameters": {
-                "debug": True,
-                "user_query": effective_query,
-                "clean_user_query": effective_query,
-                "use_llm_answer": slots.get("modality") != "Изображение",
-            },
+            "system_parameters": system_parameters,
             "search_parameters": search_params,
         }
 

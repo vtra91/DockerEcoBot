@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-Загрузка архива с фотографиями на сервер.
+Загрузка архива на сервер.
 
 Пользователь загружает архив на Яндекс.Диск (или даёт прямой HTTPS-URL),
 заходит на сервер по SSH и запускает скрипт. Скрипт скачивает архив,
-безопасно распаковывает его во временную папку и переносит изображения
-в salut_bot/images с сохранением структуры папок из архива.
+безопасно распаковывает его во временную папку и переносит все файлы
+в выбранную папку с сохранением структуры из архива.
 
-Пример:
-    sudo python3 upload_user_images.py
+Примеры:
+    python3 upload_user_images.py
+    python3 upload_user_images.py --dest /srv/DockerEcoBot/salut_bot/images
+    python3 upload_user_images.py --dest /srv/DockerEcoBot/docs
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -29,18 +32,12 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-DEST_DIR = PROJECT_ROOT / "salut_bot" / "images"
+DEFAULT_DEST = PROJECT_ROOT / "salut_bot" / "images"
 TMP_ROOT = PROJECT_ROOT / "uploads_tmp"
 
 MAX_BYTES = 2048 * 1024 * 1024          # 2 ГБ на архив
 MAX_UNPACKED = MAX_BYTES * 4            # 8 ГБ после распаковки
 MAX_FILES = 5000                        # файлов в архиве
-ENCODING = "auto"                       # utf-8 / cp1251 / cp866 / cp437
-
-IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp",
-    ".tif", ".tiff", ".heic", ".heif", ".avif",
-}
 
 YANDEX_HOSTS = {"disk.yandex.ru", "disk.yandex.com", "yadi.sk", "yandex.ru"}
 
@@ -53,7 +50,6 @@ _RU_BAD = set(
 
 class UploadError(Exception):
     """Понятная пользователю ошибка."""
-
 
 @dataclass
 class CopyStats:
@@ -319,39 +315,14 @@ def extract_archive(archive: Path, dest: Path) -> None:
     )
 
 
-def image_by_magic(path: Path) -> bool:
-    try:
-        with path.open("rb") as f:
-            head = f.read(16)
-    except OSError:
-        return False
-    if head.startswith(b"\xff\xd8\xff"):
-        return True
-    if head.startswith(b"\x89PNG\r\n\x1a\n"):
-        return True
-    if head.startswith((b"GIF87a", b"GIF89a")):
-        return True
-    if head.startswith(b"BM"):
-        return True
-    if head.startswith((b"II*\x00", b"MM\x00*")):
-        return True
-    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP":
-        return True
-    if len(head) >= 12 and head[4:8] == b"ftyp":
-        brand = head[8:12]
-        if brand in {b"heic", b"heix", b"hevc", b"mif1", b"msf1", b"avif", b"avis"}:
-            return True
-    return False
-
-
-def copy_images(source: Path, dest_root: Path) -> CopyStats:
-    """Копирует только изображения, сохраняя относительные пути."""
+def copy_files(source: Path, dest_root: Path) -> CopyStats:
+    """Копирует все обычные файлы, сохраняя относительные пути."""
     stats = CopyStats()
     dest_base = dest_root.resolve()
     for path in sorted(source.rglob("*")):
-        if path.is_symlink() or not path.is_file():
+        if path.is_dir():
             continue
-        if path.suffix.lower() not in IMAGE_EXTENSIONS or not image_by_magic(path):
+        if path.is_symlink() or not path.is_file():
             stats.skipped += 1
             continue
 
@@ -360,7 +331,7 @@ def copy_images(source: Path, dest_root: Path) -> CopyStats:
 
         parent_resolved = target.parent.resolve()
         if parent_resolved != dest_base and dest_base not in parent_resolved.parents:
-            raise UploadError(f"Путь выходит за пределы images: {target}")
+            raise UploadError(f"Путь выходит за пределы папки назначения: {target}")
 
         if target.is_symlink():
             raise UploadError(f"Не перезаписываю символическую ссылку: {target}")
@@ -379,9 +350,38 @@ def copy_images(source: Path, dest_root: Path) -> CopyStats:
     return stats
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Скачать архив и распаковать все файлы в выбранную папку.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Примеры:\n"
+            "  python3 upload_user_images.py\n"
+            "  python3 upload_user_images.py --dest /srv/DockerEcoBot/salut_bot/images\n"
+            "  python3 upload_user_images.py --dest /srv/DockerEcoBot/salut_bot/docs\n"
+        ),
+    )
+    parser.add_argument(
+        "--dest",
+        default=str(DEFAULT_DEST),
+        help=f"Куда распаковывать (по умолчанию {DEFAULT_DEST})",
+    )
+    return parser
+
+
+def resolve_dest(value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
+
+
 def main() -> int:
+    args = build_parser().parse_args()
+    dest_dir = resolve_dest(args.dest)
+
     print("=" * 72)
-    print("Загрузка архива с фотографиями")
+    print("Загрузка архива")
     print("=" * 72)
 
     raw_url = ask("Ссылка на архив (Яндекс.Диск или прямой URL)")
@@ -400,7 +400,7 @@ def main() -> int:
         parsed = urllib.parse.urlparse(download_url)
         safe_href = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         print(f"Источник: {safe_href}")
-        print(f"Куда: {DEST_DIR}")
+        print(f"Куда: {dest_dir}")
         print("Структура папок из архива сохраняется.")
         print("Существующие файлы будут перезаписаны.")
 
@@ -409,13 +409,13 @@ def main() -> int:
             print("Отменено.")
             return 0
 
-        DEST_DIR.mkdir(parents=True, exist_ok=True)
-        if not os.access(DEST_DIR, os.W_OK):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if not os.access(dest_dir, os.W_OK):
             raise UploadError(
-                f"Нет прав на запись в {DEST_DIR}. Запустите через sudo."
+                f"Нет прав на запись в {dest_dir}. Запустите через sudo."
             )
 
-        free = shutil.disk_usage(DEST_DIR).free
+        free = shutil.disk_usage(dest_dir).free
         if free < MAX_BYTES * 2:
             print(
                 f"Предупреждение: свободно {human_size(free)}, "
@@ -440,18 +440,18 @@ def main() -> int:
             except Exception as exc:
                 raise UploadError(f"Не удалось распаковать архив: {exc}") from exc
 
-            print("Копирую изображения в images...")
-            stats = copy_images(extracted_dir, DEST_DIR)
+            print("Копирую файлы...")
+            stats = copy_files(extracted_dir, dest_dir)
             if stats.files == 0:
-                raise UploadError("В архиве не найдено ни одного изображения.")
+                raise UploadError("В архиве не найдено ни одного файла.")
 
             print("\nГотово.")
-            print(f"Изображений: {stats.files}")
+            print(f"Файлов: {stats.files}")
             print(f"Объём: {human_size(stats.bytes)}")
             print(f"Пропущено: {stats.skipped}")
             if stats.overwritten:
                 print(f"Перезаписано: {stats.overwritten}")
-            print(f"Папка: {DEST_DIR}")
+            print(f"Папка: {dest_dir}")
             return 0
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)

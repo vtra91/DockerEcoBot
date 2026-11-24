@@ -10,6 +10,9 @@ from application.search.context_manager import ConversationHistory, DialogueTurn
 from application.search.continuation import ContinuationCursor, ContinuationStore
 from application.search.slot_classifier import SlotClassifier, _determine_template, _detect_ambiguity
 from application.search.slot_search_executor import (
+    IMAGE_PAGE_SIZE,
+    OBJECT_PAGE_SIZE,
+    TEXT_PAGE_SIZE,
     SlotSearchExecutor,
 )
 
@@ -30,6 +33,59 @@ _FEATURE_CLEAR_RE = re.compile(
     r"\bбез\b|\bубери\b|\bудали\b|\bотмени\b|\bне нужно\b|\bвообще\b",
     re.IGNORECASE,
 )
+
+def _should_clear_features(query: str) -> bool:
+    return bool(_FEATURE_CLEAR_RE.search(query))
+
+# ── Smalltalk ────────────────────────────────────────────────────────────────
+_SMALLTALK_WORDS = {
+    "привет", "приветствую", "здравствуйте", "здравствуй", "здорово",
+    "хай", "ку", "прикольно", "круто", "интересно", "ого", "класс", "классно",
+    "спасибо", "спс", "благодарю", "пока", "прощай", "бот",
+}
+_SMALLTALK_PHRASES = [
+    "добрый день", "добрый вечер", "доброе утро", "доброй ночи",
+    "до свидания", "до встречи", "всего доброго",
+]
+_STOP_WORDS = {
+    "а", "и", "но", "да", "нет", "ну", "вот", "же", "ли", "бы", "уже",
+    "мне", "тебе", "вам", "нас", "вас", "это", "то", "так", "очень",
+    "просто", "всё", "все", "хорошо", "ок", "окей", "ладно", "как",
+}
+_SEARCH_PREFIXES = [
+    "покаж", "показ", "расскаж", "найд", "дай", "даю", "дает", "даёт",
+    "где", "когда", "сколько", "кто", "что за", "фото", "фотк", "карт",
+    "еще", "ещё", "подскаж",
+]
+_PRONOUNS = {
+    "она", "он", "они", "оно", "его", "ее", "её", "их", "ему", "ей",
+    "им", "ним", "ними", "ней", "нем", "нём", "него", "нее", "неё",
+    "этого", "эту", "этой", "этих", "этот", "эта", "эти",
+}
+_SMALLTALK_FALLBACK = "Привет! Я Экоассистент Байкальского музея. Спросите о флоре, фауне или местах Байкала."
+
+
+def _is_smalltalk(query: str) -> bool:
+    q = query.lower().replace("ё", "е").strip()
+    q = re.sub(r"[^\w\s]", " ", q)
+    if not q or len(q.split()) > 8:
+        return False
+    if any(m in q for m in _SEARCH_PREFIXES):
+        return False
+    words = re.findall(r"[а-яa-z]+", q)
+    if any(w in _PRONOUNS for w in words):
+        return False
+    found_phrase = False
+    for p in _SMALLTALK_PHRASES:
+        if p in q:
+            q = q.replace(p, " ")
+            found_phrase = True
+    words = re.findall(r"[а-яa-z]+", q)
+    if not words:
+        return found_phrase
+    if not any(w in _SMALLTALK_WORDS for w in words) and not found_phrase:
+        return False
+    return all(w in _SMALLTALK_WORDS or w in _STOP_WORDS or len(w) < 3 for w in words)
 
 _STOP_WORDS = {
     "а", "и", "но", "да", "нет", "ну", "вот", "же", "ли", "бы", "уже", "ещё", "еще",
@@ -286,6 +342,20 @@ class DialogueOrchestrator:
         """Полный цикл: классификация → мердж контекста → поиск → проактивность."""
         t0 = time.monotonic()
 
+        if _is_smalltalk(query):                           
+            answer = await self._executor.respond_smalltalk(query)
+            if not answer:
+                answer = _SMALLTALK_FALLBACK
+            logger.info(f"💬 Smalltalk short-circuit: {query[:60]!r}")
+            return {
+                "slots": {},
+                "result": {"answer": answer},
+                "proactive": {},
+                "simplifications": [],
+                "modality_ambiguous": False,
+                "is_continuation": False,
+                "timing": {"total_ms": _ms(t0)},
+            }
 
         multi_act = multi_act_enabled if multi_act_enabled is not None else True
         turns = await self._history.get_turns(user_id) if (user_id and multi_act) else []
@@ -459,7 +529,7 @@ class DialogueOrchestrator:
             query=query,
             slots=slots,
             object_offset=object_offset,
-            object_limit=int(more.get("object_limit")),
+            object_limit=int(more.get("object_limit") or OBJECT_PAGE_SIZE),
             object_has_more=bool(more.get("object_has_more")),
             resource_offset=int(more.get("next_resource_offset") or 0),
             shown=int(more.get("shown") or 0),
@@ -588,6 +658,7 @@ class DialogueOrchestrator:
                 object_offset=object_offset,
                 object_limit=cursor.object_limit,
                 resource_offset=resource_offset,
+                resource_limit=IMAGE_PAGE_SIZE,
                 use_llm_answer=False,
             )
             images = result.get("images") or []
@@ -626,6 +697,7 @@ class DialogueOrchestrator:
                 object_offset=object_offset,
                 object_limit=cursor.object_limit,
                 resource_offset=resource_offset,
+                resource_limit=TEXT_PAGE_SIZE,
                 use_llm_answer=False,
             )
             answer = (result.get("answer") or "").strip()

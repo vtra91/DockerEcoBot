@@ -34,6 +34,9 @@ _FEATURE_CLEAR_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _should_clear_features(query: str) -> bool:
+    return bool(_FEATURE_CLEAR_RE.search(query))
+
 _STOP_WORDS = {
     "а", "и", "но", "да", "нет", "ну", "вот", "же", "ли", "бы", "уже", "ещё", "еще",
     "мне", "тебе", "вам", "нас", "вас", "это", "этот", "эта", "эти", "то", "так",

@@ -273,7 +273,7 @@
         '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Синхронизация...';
 
       try {
-        const resp = await fetch("http://localhost:8000/ingest", {
+        const resp = await fetch("/ingest", {
           method: "POST",
         });
         const data = await resp.json();

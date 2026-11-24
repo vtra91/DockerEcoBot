@@ -265,7 +265,7 @@ services:
     container_name: stt-service
     restart: unless-stopped
     environment:
-      STT_MODEL_SIZE: small
+      STT_MODEL_SIZE: medium
       STT_LANGUAGE: ru
       STT_WORDS_FILE: /app/data/words.txt
       STT_MODEL_CACHE_DIR: /models/whisper
@@ -281,7 +281,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2g
+          memory: 6g
     networks: [ecobot_net]
 
   # Тесты работоспособности всего стека. В `up -d` не участвует (профиль health).

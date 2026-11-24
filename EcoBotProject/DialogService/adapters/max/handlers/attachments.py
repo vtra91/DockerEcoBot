@@ -8,6 +8,7 @@ from maxapi.enums.attachment import AttachmentType
 from maxapi.types import MessageCreated
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from maxapi.types.attachments.buttons import CallbackButton
+from adapters.max.presenter import render_pipeline_result
 
 from infrastructure.max_bot.context import ctx
 from utils.bot_messages import (
@@ -221,15 +222,17 @@ async def _handle_voice_message(bot: Bot, chat_id: int, attachment) -> None:
         result = await ctx.orchestrator.process(
             transcribed_text,
             user_id=str(chat_id),
-            promo_enabled=promo_enabled
+            promo_enabled=promo_enabled,
         )
+        await render_pipeline_result(bot, chat_id, result, ctx.session)
+
         # 4. Формируем и отправляем ответ пользователю
-        answer = (
-                result.get("result", {}).get("answer") or
-                result.get("answer") or
-                "Запрос обработан, но ответ пуст."
-        )
-        await bot.send_message(chat_id=chat_id, text=answer)
+        #answer = (
+        #        result.get("result", {}).get("answer") or
+        #        result.get("answer") or
+        #        "Запрос обработан, но ответ пуст."
+        #)
+        # await bot.send_message(chat_id=chat_id, text=answer)
 
     except Exception as e:
         logger.error(f"[{chat_id}] Ошибка обработчика голосовых сообщений: {e}", exc_info=True)

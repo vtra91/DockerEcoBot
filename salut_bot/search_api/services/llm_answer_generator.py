@@ -90,8 +90,7 @@ class LLMAnswerGenerator:
             "- Если вопрос содержит слово 'сколько' подсчитай количество объектов или ресурсов выданных из базы и расскажи вкратце о нескольких\n"
             "- Начинай ответ с прямого ответа на запрос\n"
             "- Даже при неполной информации предоставь доступные детали\n"
-            "- Будь информативным"
-	    "- НЕ ОТПРАВЛЯЙ случайно попавшие в ответ id (например: Obj_123..., или Service_124...), вместо них оставь строковое человекочитаемое представление данного объекта"
+            "- Будь информативным и дружелюбным"
             "- Даже при неполной информации предоставь доступные детали"
             "- Не давай ссылки на localhost и карты в целом\n\n"
             "База знаний:\n{context}\n\n"
@@ -104,12 +103,25 @@ class LLMAnswerGenerator:
         if objects:
             parts.append(f"Найдено объектов: {len(objects)}")
             for o in objects[:5]:
-                parts.append(f"- {o.object_type} '{o.db_id}': {str(o.properties)[:200]}")
+                
+                if o.synonyms and len(o.synonyms) > 0:
+                    obj_name = o.synonyms[0]
+                else:
+                    obj_name = (
+                        o.properties.get("Вид (русское название)") or 
+                        o.properties.get("Название") or 
+                        o.properties.get("Наименование") or 
+                        "Неизвестный объект"
+                    )
+                
+                parts.append(f"- {o.object_type} '{obj_name}': {str(o.properties)[:200]}")
+        
         if resources:
             parts.append(f"Найдено ресурсов: {len(resources)}")
             for r in resources[:5]:
                 content_preview = str(r.content)[:2000] if r.content else "Нет данных"
                 parts.append(f"- {r.title} ({r.modality_type}): {content_preview}")
+                
         return "\n".join(parts) if parts else "Нет релевантной информации."
 
     def _build_vector_context(self, docs: List[Dict[str, Any]]) -> str:

@@ -39,7 +39,7 @@ async def render_pipeline_result(
     slots: dict = pipeline_result.get("slots") or {}
     more: dict = result.get("more") or {}
 
-      # --------------Блок прерывания отправки текстовых сообщений когда есть фото---------------
+    # --------------Блок прерывания отправки текстовых сообщений когда есть фото---------------
     # Если в ответе есть изображение, присылаем только их
     if images:
         for url in images[:_MAX_IMAGES]:
@@ -68,6 +68,18 @@ async def render_pipeline_result(
 
         return
 
+    #for url in images[:_MAX_IMAGES]:
+    #    data = await _fetch_image(session, url)
+    #    if data:
+    #        try:
+    #            await bot.send_message(
+    #                chat_id=chat_id,
+    #                attachments=[InputMediaBuffer(buffer=data, filename="photo.jpg")],
+    #            )
+    #        except Exception as e:
+    #            logger.error(f"Image send failed: {e}")
+
+    # Если фото нет, отправляем текстовое сообщение
     builder = InlineKeyboardBuilder()
     has_buttons = False
     # ----------------------------------------------------------------------------------

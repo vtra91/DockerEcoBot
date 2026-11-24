@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 # API Олега
 PLANT_API_URL = os.getenv("PLANT_API_URL", "http://194.156.118.21:8020/predict")
 
+# STT сервис
+STT_SERVICE_URL = os.getenv("STT_SERVICE_URL", "http://stt-service:8081/transcribe")
 
 def register_attachment_handlers(dp: Dispatcher, bot: Bot) -> None:
 
@@ -38,6 +40,26 @@ def register_attachment_handlers(dp: Dispatcher, bot: Bot) -> None:
                 return
 
             attachment = attachments[0]
+
+            # ——————————Защита от "повторных" сообщений————————
+            attachment_url = getattr(attachment.payload, "url", None) if attachment.payload else None
+            if attachment_url:
+                cache_key = f"max:processed_attachment:{chat_id}:{attachment_url}"
+                is_processed = await ctx.redis_client.get(cache_key)
+
+                if is_processed:
+                    logger.info(f"[{chat_id}] Дубликат запроса проигнорирован (URL: {attachment_url})")
+                    return  # Молча игнорируем повторную отправку
+
+                # Запоминаем, что этот запрос на 120 секунд
+                await ctx.redis_client.set(cache_key, "1", ex=120)
+            # —————————————————————————————————————————————————
+
+            # ——————————Обработка голосовых сообщений————————
+            if attachment.type == AttachmentType.AUDIO:
+                await _handle_voice_message(bot, chat_id, attachment)
+                return
+            # ——————————————————————————————————————————————
 
             if (attachment.type != AttachmentType.IMAGE
                     or not attachment.payload
@@ -137,3 +159,79 @@ async def _identify_plant(image_bytes: bytes, image_url: str, content_type: str)
     except Exception as e:
         logger.error(f"Plant API request failed: {e}")
         return None
+
+# ——————————Обработка голосовых сообщений————————
+async def _handle_voice_message(bot: Bot, chat_id: int, attachment) -> None:
+    try:
+        payload = getattr(attachment, 'payload', None)
+        audio_url = None
+        if payload:
+            if hasattr(payload, "url"):
+                audio_url = payload.url
+            elif hasattr(payload, 'audio') and hasattr(payload.audio, 'url'):
+                audio_url = payload.audio.url
+
+        # Показывает индикатор "печатает"
+        try:
+            await bot.send_action(chat_id=chat_id, action="TYPING")
+        except Exception:
+            pass
+
+        # 1. Скачивает аудиофайл с сервера
+        async with ctx.session.get(audio_url) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                logger.error(f"[{chat_id}] Failed to download audio: {resp.status} - {error_text[:200]}")
+                await bot.send_message(chat_id=chat_id, text="❌ Ошибка загрузки аудиосообщения.")
+                return
+
+            audio_bytes = await resp.read()
+            content_type = resp.headers.get("content-type", "audio/ogg")
+
+        # 2. Отправляем файл в STT-сервис
+        form = aiohttp.FormData()
+        form.add_field('file', audio_bytes, filename='voice.ogg', content_type=content_type)
+
+        async with ctx.session.post(STT_SERVICE_URL, data=form) as stt_resp:
+            if stt_resp.status != 200:
+                error_text = await stt_resp.text()
+                logger.error(f"[{chat_id}] STT error: {stt_resp.status} - {error_text[:300]}")
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ Ошибка распознавания речи. Попробуйте написать текстом."
+                )
+                return
+
+            stt_data = await stt_resp.json()
+            transcribed_text = stt_data.get("text", "").strip()
+
+            logger.info(f"[{chat_id}] STT результат: '{transcribed_text}'")
+
+            if not transcribed_text:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ Не удалось распознать речь. Попробуйте говорить четче или напишите текстом."
+                )
+                return
+
+        # 3. Передаем распознанный текст
+        promo_val = await ctx.redis_client.get("settings:promo_enabled")
+        promo_enabled = promo_val != "0"
+
+        result = await ctx.orchestrator.process(
+            transcribed_text,
+            user_id=str(chat_id),
+            promo_enabled=promo_enabled
+        )
+        # 4. Формируем и отправляем ответ пользователю
+        answer = (
+                result.get("result", {}).get("answer") or
+                result.get("answer") or
+                "Запрос обработан, но ответ пуст."
+        )
+        await bot.send_message(chat_id=chat_id, text=answer)
+
+    except Exception as e:
+        logger.error(f"[{chat_id}] Ошибка обработчика голосовых сообщений: {e}", exc_info=True)
+        await bot.send_message(chat_id=chat_id, text="Ошибка обработчика голосовых сообщений")
+# ———————————————————————————————————————————————

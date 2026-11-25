@@ -461,8 +461,6 @@ def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[s
         logger.info("🔍 features dropped for Геоданные modality")
         slots["features"] = {}
         features = {}
-    elif features and slots.get("modality") == "Текст":
-        pass
 
     # ── 0.5. Явный маркер карты → Геоданные ──────────────────────────────────
     # "на карте", "на карту", "по карте", "карту/карте" — однозначный сигнал
@@ -524,7 +522,7 @@ def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[s
                 props["Тип ОФФ"] = "Объект фауны"
             # Оба → не устанавливаем (запрос о флоре И фауне одновременно)
             
-    # Если пользователь просит "редкие" или "эндемики", ищем оба значения.
+    # Если пользователь просит "редкие" или "эндемики", ставим строковое значение.
     if "эндем" in q_lower:
         props["Редкость"] = "Эндемик"
     elif "редк" in q_lower or "краснокниж" in q_lower:
@@ -579,11 +577,12 @@ def _post_process_slots(query: str, slots: dict, valid_features: Optional[Dict[s
     # Если valid_features загружены из БД — оставляем только те признаки,
     # которые реально существуют для данной модальности в resource.features.
     # Это устраняет галлюцинации ЛЛМ типа {"Среда обитания": "Горы"} при Геоданных.
-    if valid_features is not None:
-        modality = slots.get("modality", "Текст")
-        allowed: Set[str] = valid_features.get(modality, set())
-        features = {k: v for k, v in features.items() if k.lower() in allowed}
+    #     #     if False and valid_features is not None:  # ОТКЛЮЧЕНО для новых признаков
+    #     #         modality = slots.get("modality", "Текст")
+    #     #         allowed: Set[str] = valid_features.get(modality, set())
+    #     #         features = {k: v for k, v in features.items() if k.lower() in allowed}
 
+    logger.info(f"!!! DEBUG POST_PROCESS: features перед возвратом = {features}")
     slots["properties"] = props
     slots["features"] = features
     return slots

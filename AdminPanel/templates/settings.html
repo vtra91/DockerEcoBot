@@ -15,7 +15,7 @@ block content %}
       {% for tab in schema.tabs %}
       <li class="nav-item">
         <button
-          class="nav-link {% if loop.first %}active{% endif %}"
+          class="nav-link {% if tab.id == active_tab %}active{% endif %}"
           data-bs-toggle="tab"
           data-bs-target="#tab-{{ tab.id }}"
           type="button"
@@ -30,7 +30,7 @@ block content %}
   <div class="card-body p-4 tab-content" id="settingsTabContent">
     {% for tab in schema.tabs %}
     <div
-      class="tab-pane fade {% if loop.first %}show active{% endif %}"
+      class="tab-pane fade {% if tab.id == active_tab %}show active{% endif %}"
       id="tab-{{ tab.id }}"
     >
       {% if tab.id == "prompts" %} {# ── Вкладка Промпты — особый случай ── #}
@@ -111,6 +111,145 @@ block content %}
         </div>
       </form>
 
+      {% elif tab.id == "faq" %}
+      <style>
+        #faq-modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px; z-index: 1080; }
+        #faq-modal:target { display: flex; }
+        #faq-modal .faq-modal-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.55); }
+        #faq-modal .faq-modal-window { position: relative; width: min(820px, 100%); max-height: 90vh; overflow-y: auto; background: var(--bg-card); color: var(--text-primary); border-radius: 16px; box-shadow: 0 24px 70px rgba(15, 23, 42, 0.35); padding: 24px; }
+        .faq-key { font-family: "JetBrains Mono", monospace; font-weight: 600; color: #dc2626; }
+      </style>
+      <div class="section-divider">
+        <span class="section-divider-label instant">Мгновенно</span>
+      </div>
+
+      {% if faq_msg == 'saved' %}<div class="alert alert-success py-2">FAQ сохранён.</div>{% endif %}
+      {% if faq_msg == 'deleted' %}<div class="alert alert-success py-2">Запись удалена.</div>{% endif %}
+      {% if faq_msg == 'backend' %}<div class="alert alert-danger py-2">Backend не принял изменения — попробуйте позже.</div>{% endif %}
+      {% if faq_err == 'empty' %}<div class="alert alert-danger py-2">Заполните вопрос и ответ.</div>{% endif %}
+      {% if faq_err == 'json' %}<div class="alert alert-danger py-2">Некорректный JSON: нужен массив записей, у каждой question и answer.</div>{% endif %}
+
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+        <div class="btn-group" role="group">
+          <a class="btn btn-sm {% if faq_view == 'list' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&amp;view=list"><i class="bi bi-list-ul me-1"></i>Список</a>
+          <a class="btn btn-sm {% if faq_view == 'json' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&amp;view=json"><i class="bi bi-braces me-1"></i>JSON</a>
+        </div>
+        <a class="btn btn-sm btn-primary" href="?tab=faq&amp;view=list&mode=add#faq-modal"><i class="bi bi-plus-lg me-1"></i>Добавить запись</a>
+      </div>
+
+      {% if faq_view == 'json' %}
+      <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/json">
+        <div class="field-desc mb-2">Полный список в JSON. Отредактируйте и нажмите «Сохранить JSON».</div>
+        <textarea name="payload" class="form-control" rows="20" spellcheck="false"
+          style="font-family: &quot;JetBrains Mono&quot;, monospace; font-size: 0.85rem; background: #f8fafc; border: 1px solid #cbd5e1;">{{ faq_json_text }}</textarea>
+        <div class="save-bar">
+          <button type="submit" class="btn btn-primary px-4 fw-bold">Сохранить JSON</button>
+        </div>
+      </form>
+      {% else %}
+
+      {% if faq_mode in ('add', 'edit') %}
+      <div id="faq-modal">
+        <a class="faq-modal-backdrop" href="?tab=faq&amp;view=list" aria-label="Закрыть"></a>
+        <div class="faq-modal-window" role="dialog" aria-modal="true">
+          <div class="d-flex justify-content-between align-items-start mb-3">
+            <h6 class="mb-0">{% if faq_edit_item %}Изменить правило{% else %}Новое правило{% endif %}</h6>
+            <a class="btn-close" href="?tab=faq&amp;view=list" aria-label="Закрыть"></a>
+          </div>
+          {% if faq_err == 'empty' %}<div class="alert alert-danger py-2">Заполните вопрос и ответ.</div>{% endif %}
+          <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/save">
+            <input type="hidden" name="original_id" value="{{ faq_edit_item.id if faq_edit_item else '' }}">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label fw-bold">
+                  <abbr title="Идентификатор правила. БЯМ напрямую его не использует — нужен для быстрого ориентирования в логах и списке.">Идентификатор</abbr>
+                  (<span class="faq-key">id</span>)
+                </label>
+                <input class="form-control" name="id" value="{{ faq_edit_item.id if faq_edit_item else '' }}" placeholder="например, creators">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label fw-bold">
+                  <abbr title="Метка для аналитики и порядка в списке. На поиск и ответ не влияет.">Тип правила</abbr>
+                  (<span class="faq-key">kind</span>)
+                </label>
+                <select class="form-select" name="kind">
+                  <option value="meta" {% if not faq_edit_item or faq_edit_item.kind == 'meta' %}selected{% endif %}>Информация о боте (meta)</option>
+                  <option value="chitchat" {% if faq_edit_item and faq_edit_item.kind == 'chitchat' %}selected{% endif %}>Свободная болтовня (chitchat)</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label fw-bold">
+                  <abbr title="Эталонная формулировка: с неё начинается сравнение. Если сообщение не совпало с ней достаточно точно, бот переходит к «Подсказкам БЯМ».">Вопрос</abbr>
+                  (<span class="faq-key">question</span>)
+                </label>
+                <input class="form-control" name="question" value="{{ faq_edit_item.question if faq_edit_item else '' }}" required>
+              </div>
+              <div class="col-12">
+                <label class="form-label fw-bold">
+                  <abbr title="Другие формулировки того же вопроса, по одной в строке. Бот сравнивает сообщение с каждой отдельно: сначала ищет точное совпадение, затем — похожесть слов. Пишите 3–7 живых вариантов; уточняющие слова вроде «скажи» или «пожалуйста» можно не добавлять — они не помогают совпадению. Если ничего не подошло — отвечает БЯМ.">Подсказки БЯМ</abbr>
+                  (<span class="faq-key">aliases</span>)
+                </label>
+                <textarea class="form-control" name="aliases" rows="3" placeholder="По одной формулировке в строке">{{ faq_edit_aliases }}</textarea>
+              </div>
+              <div class="col-12">
+                <label class="form-label fw-bold">
+                  <abbr title="Детерминированный ответ — бот отправляет этот текст без изменений, без участия БЯМ.">Ответ</abbr>
+                  (<span class="faq-key">answer</span>)
+                </label>
+                <textarea class="form-control" name="answer" rows="3" required>{{ faq_edit_item.answer if faq_edit_item else '' }}</textarea>
+              </div>
+            </div>
+            <div class="d-flex gap-2 mt-4">
+              <button type="submit" class="btn btn-primary px-4 fw-bold">Сохранить</button>
+              <a class="btn btn-outline-secondary" href="?tab=faq&amp;view=list">Отмена</a>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-2">
+          <thead>
+            <tr>
+              <th style="width: 16%"><abbr title="Имя правила для списка и логов. БЯМ его не использует.">Идентификатор</abbr></th>
+              <th style="width: 12%"><abbr title="Категория правила: информация о боте или свободная болтовня. Влияет только на порядок в списке.">Тип правила</abbr></th>
+              <th style="width: 22%"><abbr title="Эталонная формулировка — с неё начинается сравнение сообщения.">Вопрос</abbr></th>
+              <th><abbr title="Варианты формулировок, которые бот проверяет, если эталон не совпал.">Подсказки БЯМ</abbr></th>
+              <th><abbr title="Готовый текст ответа, отправляется без изменений.">Ответ</abbr></th>
+              <th style="width: 96px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in (faq_items or []) %}
+            <tr>
+              <td><code>{{ it.id }}</code></td>
+              <td>{{ 'Информация о боте' if it.kind == 'meta' else 'Болтовня' }}</td>
+              <td><strong>{{ it.question }}</strong></td>
+              <td>{{ (it.aliases or []) | join('; ') }}</td>
+              <td><strong>{{ it.answer }}</strong></td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-secondary" href="?tab=faq&amp;view=list&mode=edit&id={{ it.id }}#faq-modal" title="Изменить"><i class="bi bi-pencil"></i></a>
+                <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/delete" class="d-inline" onsubmit="return confirm('Удалить запись?')">
+                  <input type="hidden" name="id" value="{{ it.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if not faq_items %}
+      <div class="text-muted small">Записей пока нет — нажмите «Добавить запись».</div>
+      {% endif %}
+      {% if faq_path %}
+      <div class="text-muted small mt-1">
+        Файл: <code>{{ faq_path }}</code> · записей: {{ faq_count }}
+      </div>
+      {% endif %}
+      {% endif %}
+
       {% else %} {# ── Обычная вкладка — разбиваем поля на instant и restart ──
       #} {% set instant_fields = tab.fields | selectattr("reload", "equalto",
       "instant") | list %} {% set restart_fields = tab.fields |
@@ -131,7 +270,7 @@ block content %}
   type="checkbox"
   id="toggle-{{ field.key }}"
   style="width: 2.5em; height: 1.3em"
-  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) %}checked{% endif %}
+  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) or (field.key == 'semantic_router' and semantic_router_enabled) %}checked{% endif %}
 />
                 <label
                   class="form-check-label fw-bold ms-1"
@@ -244,7 +383,7 @@ block content %}
         <div class="save-bar">
           <button
             type="button"
-            class="btn btn-warning px-4 fw-bold"
+            class="btn btn-primary px-4 fw-bold"
             onclick="saveShared('form-{{ tab.id }}-restart', '{{ ADMIN_PREFIX }}/settings/shared', 'restart', '{{ tab.restart_cmd }}')"
           >
             Сохранить
@@ -281,10 +420,12 @@ block content %}
 </div>
 
 <script>
-  document.addEventListener("DOMContentLoaded", function () {
-    document
-      .querySelectorAll('[data-bs-toggle="tooltip"]')
-      .forEach((el) => new bootstrap.Tooltip(el));
+  function initSettingsPage() {
+    if (window.bootstrap && bootstrap.Tooltip) {
+      document
+        .querySelectorAll('[data-bs-toggle="tooltip"]')
+        .forEach((el) => new bootstrap.Tooltip(el));
+    }
 
     // Promo toggle
     const promoToggle = document.getElementById("toggle-promo_enabled");
@@ -327,7 +468,60 @@ block content %}
         }
       });
     }
-  });
+
+    // Semantic router toggle
+    const routerToggle = document.getElementById("toggle-semantic_router");
+    if (routerToggle) {
+      routerToggle.addEventListener("change", async (e) => {
+        try {
+          await fetch("{{ ADMIN_PREFIX }}/chat/semantic-router-setting", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: e.target.checked }),
+          });
+          showToast(
+            e.target.checked
+              ? "БЯМ-роутер включён"
+              : "БЯМ-роутер выключен — поведение как раньше",
+            "success",
+          );
+        } catch {
+          showToast("Ошибка при сохранении", "danger");
+        }
+      });
+    }
+
+    // ── Запоминаем активную вкладку настроек; сбрасываем при уходе со страницы ──
+    try {
+    const SETTINGS_TAB_KEY = "eco_settings_active_tab";
+    const savedTab = sessionStorage.getItem(SETTINGS_TAB_KEY);
+    if (savedTab) {
+      const savedBtn = document.querySelector('[data-bs-target="#tab-' + savedTab + '"]');
+      if (savedBtn && window.bootstrap && bootstrap.Tab) {
+        bootstrap.Tab.getOrCreateInstance(savedBtn).show();
+      }
+    }
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach((btn) => {
+      btn.addEventListener("shown.bs.tab", (e) => {
+        const target = (e.target.getAttribute("data-bs-target") || "").replace("#tab-", "");
+        if (target) sessionStorage.setItem(SETTINGS_TAB_KEY, target);
+      });
+    });
+    document.querySelectorAll("a[href]").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (!href || href.startsWith("#")) return;
+      if (href.indexOf("/settings") === -1) {
+        a.addEventListener("click", () => sessionStorage.removeItem(SETTINGS_TAB_KEY));
+      }
+    });
+    } catch (e) { /* приватный режим/без storage — не критично */ }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initSettingsPage);
+  } else {
+    initSettingsPage();
+  }
 
   function togglePw(btn) {
     const input = btn.closest(".input-wrap").querySelector("input");
@@ -389,6 +583,10 @@ block content %}
       danger: "text-bg-danger",
       warning: "text-bg-warning",
     };
+    if (!toast || !(window.bootstrap && bootstrap.Toast)) {
+      console.log("[toast]", type || "info", msg);
+      return;
+    }
     toast.className = `toast align-items-center border-0 ${colorMap[type] || "text-bg-secondary"}`;
     document.getElementById("toastMessage").innerText = msg;
     new bootstrap.Toast(toast, { delay: 4000 }).show();

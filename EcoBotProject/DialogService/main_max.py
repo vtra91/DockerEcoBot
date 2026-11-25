@@ -15,6 +15,7 @@ from application.search.slot_classifier import SlotClassifier
 from application.search.slot_search_executor import SlotSearchExecutor
 from application.search.context_manager import ConversationHistory
 from application.search.dialogue_orchestrator import DialogueOrchestrator
+from application.search.profanity import warmup as profanity_warmup
 from adapters.max.handlers.commands import register_command_handlers
 from adapters.max.handlers.messages import register_message_handlers
 from adapters.max.handlers.callbacks import register_callback_handlers
@@ -82,6 +83,12 @@ async def main() -> None:
         history=ctx.history,
         redis_client=ctx.redis_client,
     )
+
+    # Предзагрузка фильтра брани: словари pymorphy2 тяжёлые, грузим один раз.
+    try:
+        await asyncio.to_thread(profanity_warmup)
+    except Exception as exc:
+        logger.warning("Profanity warmup failed: %s", exc)
 
     asyncio.create_task(_config_reload_listener())
 

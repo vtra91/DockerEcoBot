@@ -15,6 +15,7 @@ from .attractions import router as attractions_router
 from ..database import router as database_router
 from .reload import router as reload_router
 from .smalltalk import router as smalltalk_router
+from .faq import router as faq_router
 
 all_routers = [
     search_router,
@@ -34,4 +35,5 @@ all_routers = [
     database_router,
     reload_router,
     smalltalk_router,
+    faq_router,
 ]

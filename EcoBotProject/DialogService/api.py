@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 import aiohttp
 import redis.asyncio as aioredis
@@ -7,6 +8,7 @@ from fastapi import FastAPI
 
 from adapters.http.routes.search import router as search_router
 from adapters.http.routes.config import router as config_router
+from application.search.profanity import warmup as profanity_warmup
 from infrastructure.db_feature_loader import load_valid_features
 
 logging.basicConfig(
@@ -26,6 +28,11 @@ async def lifespan(app: FastAPI):
         db=0,
         decode_responses=True,
     )
+    # Предзагрузка фильтра брани: словари pymorphy2 тяжёлые, грузим один раз.
+    try:
+        await asyncio.to_thread(profanity_warmup)
+    except Exception as exc:
+        logger.warning("Profanity warmup failed: %s", exc)
     logger.info("Core API: сессия открыта.")
     yield
     await app.state.session.close()

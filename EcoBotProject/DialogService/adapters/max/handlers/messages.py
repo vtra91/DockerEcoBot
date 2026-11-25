@@ -41,10 +41,13 @@ def register_message_handlers(dp: Dispatcher, bot: Bot) -> None:
             promo_enabled = promo_val != "0"
             multi_act_val = await ctx.redis_client.get("settings:multi_act_dialog")
             multi_act_enabled = multi_act_val != "0"
+            router_val = await ctx.redis_client.get("settings:semantic_router")
+            router_enabled = router_val == "1"
             result = await ctx.orchestrator.process(
                 text, user_id=str(chat_id),
                 promo_enabled=promo_enabled,
                 multi_act_enabled=multi_act_enabled,
+                router_enabled=router_enabled,
             )
             await render_pipeline_result(bot, chat_id, result, ctx.session)
 

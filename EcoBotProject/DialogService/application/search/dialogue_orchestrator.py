@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -15,9 +16,12 @@ from application.search.slot_search_executor import (
     TEXT_PAGE_SIZE,
     SlotSearchExecutor,
 )
+from application.search.profanity import is_abusive
+from application.search.semantic_router import get_router
 
 #from application.search.ordinal_resolver import parse_ordinal, OUT_OF_RANGE_TEMPLATE
 from utils.error_logger import log_nlu_miss
+from utils.bot_messages import ABUSE_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +66,20 @@ _PRONOUNS = {
     "им", "ним", "ними", "ней", "нем", "нём", "него", "нее", "неё",
     "этого", "эту", "этой", "этих", "этот", "эта", "эти",
 }
-_SMALLTALK_FALLBACK = "Привет! Я Экоассистент Байкальского музея. Спросите о флоре, фауне или местах Байкала."
+_SMALLTALK_FALLBACK = "Я — Экоассистент Байкальского музея. Спросите о флоре, фауне или местах Байкала."
+
+# Только те местоимения, которые указывают на объект из прошлого ответа.
+# «это/этот/эта» сюда не входят: они чаще означают «этот факт», а не объект.
+_OBJECT_PRONOUNS = {
+    "он", "она", "они", "оно", "его", "ее", "её", "их", "ему", "ей",
+    "им", "ним", "ними", "ней", "нем", "нём", "него", "нее", "неё",
+}
+
+
+def _mentions_previous(query: str) -> bool:
+    """Ссылается ли реплика на прошлый объект («а у неё как дела», «а он где»)."""
+    words = set(re.findall(r"[а-яa-z]+", query.lower().replace("ё", "е")))
+    return bool(words & _OBJECT_PRONOUNS)
 
 
 def _is_smalltalk(query: str) -> bool:
@@ -321,6 +338,33 @@ def _slots_from_list_item(item: dict, modality: str, snapshot: dict) -> dict:
     return slots
 
 
+# ── Семантический слой: брань / smalltalk ─────────────────────────────────────
+
+def _router_enabled(flag: bool | None) -> bool:
+    """True включает слой роутера. Явный флаг (из админки) важнее переменной окружения."""
+    if flag is not None:
+        return bool(flag)
+    raw = os.getenv("SEMANTIC_ROUTER_ENABLED", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _short_circuit(answer: str, t0: float, slots: dict | None = None) -> dict:
+    """Ответ без поиска — тот же контракт, что у smalltalk-заглушки.
+
+    slots заполняется маршрутной информацией, чтобы debug-панель в админке
+    показывала, какой слой сработал (а не пустой {}).
+    """
+    return {
+        "slots": slots or {},
+        "result": {"answer": answer},
+        "proactive": {},
+        "simplifications": [],
+        "modality_ambiguous": False,
+        "is_continuation": False,
+        "timing": {"total_ms": _ms(t0)},
+    }
+
+
 # ── Оркестратор ───────────────────────────────────────────────────────────────
 
 class DialogueOrchestrator:
@@ -338,28 +382,73 @@ class DialogueOrchestrator:
         self._continuation = ContinuationStore(redis_client)
 
     async def process(self, query: str, user_id: str | None = None, promo_enabled: bool | None = None,
-                      multi_act_enabled: bool | None = None) -> dict:
+                      multi_act_enabled: bool | None = None,
+                      router_enabled: bool | None = None) -> dict:
         """Полный цикл: классификация → мердж контекста → поиск → проактивность."""
         t0 = time.monotonic()
+        router_on = _router_enabled(router_enabled)
 
-        if _is_smalltalk(query):                           
-            answer = await self._executor.respond_smalltalk(query)
+        # Слой 1: нецензурная лексика — детерминированно, без БЯМ и без поиска.
+        if router_on and is_abusive(query):
+            logger.info(f"🚫 Abuse blocked: {query[:60]!r}")
+            return _short_circuit(ABUSE_TEXT, t0, slots={"route": "ABUSE", "template": "ABUSE"})
+
+        # Слой 1.5: FAQ — точное/близкое совпадение важнее маршрута:
+        # правило из справочника срабатывает, даже если роутер увёл бы в поиск.
+        if router_on and (faq_hit := await self._executor.match_faq(query)):
+            answer = (faq_hit.get("answer") or "").strip()
+            if answer:
+                logger.info(f"📚 FAQ match: id={faq_hit.get('id')} query={query[:60]!r}")
+                return _short_circuit(
+                    answer,
+                    t0,
+                    slots={"route": "SMALLTALK", "template": "SMALLTALK",
+                           "matched_by": "faq", "source": "faq", "faq": faq_hit},
+                )
+
+        # Слой 2: быстрый smalltalk (приветствия, благодарности, эмоции).
+        if _is_smalltalk(query):
+            details = await self._executor.respond_smalltalk_details(query)
+            answer = (details.get("answer") or "").strip()
+            debug_slots = {"route": "SMALLTALK", "template": "SMALLTALK",
+                           "matched_by": "heuristic", "source": details.get("source")}
+            if details.get("faq"):
+                debug_slots["faq"] = details["faq"]
             if not answer:
                 answer = _SMALLTALK_FALLBACK
             logger.info(f"💬 Smalltalk short-circuit: {query[:60]!r}")
-            return {
-                "slots": {},
-                "result": {"answer": answer},
-                "proactive": {},
-                "simplifications": [],
-                "modality_ambiguous": False,
-                "is_continuation": False,
-                "timing": {"total_ms": _ms(t0)},
-            }
+            return _short_circuit(answer, t0, slots=debug_slots)
 
         multi_act = multi_act_enabled if multi_act_enabled is not None else True
         turns = await self._history.get_turns(user_id) if (user_id and multi_act) else []
         prev = turns[-1] if turns else None
+
+        # Слой 3: семантический роутер — длинный хвост smalltalk и брани,
+        # который не поймали быстрые проверки.
+        if router_on:
+            # Продолжение разговора об объекте («а у неё как дела», «а он где?»)
+            # всегда поиск — иначе бытовая формулировка уводит в болтовню.
+            if prev and prev.slots.get("synonym") and _mentions_previous(query):
+                route = "SEARCH"
+                logger.info(f"🧭 Route=SEARCH (продолжение об объекте): {query[:60]!r}")
+            else:
+                route = await get_router(os.getenv("LLM_PROVIDER", "qwen")).route(
+                    query, prev_query=prev.query if prev else None
+                )
+            if route == "ABUSE":
+                logger.info(f"🚫 Abuse blocked by router: {query[:60]!r}")
+                return _short_circuit(ABUSE_TEXT, t0, slots={"route": "ABUSE", "template": "ABUSE", "matched_by": "router"})
+            if route == "SMALLTALK":
+                details = await self._executor.respond_smalltalk_details(query)
+                answer = (details.get("answer") or "").strip()
+                debug_slots = {"route": "SMALLTALK", "template": "SMALLTALK",
+                               "matched_by": "router", "source": details.get("source")}
+                if details.get("faq"):
+                    debug_slots["faq"] = details["faq"]
+                if not answer:
+                    answer = _SMALLTALK_FALLBACK
+                logger.info(f"💬 Smalltalk by router: {query[:60]!r}")
+                return _short_circuit(answer, t0, slots=debug_slots)
 
         # Передаём предыдущий запрос и промо в LLM — для разрешения местоимений
         prev_promo = prev.promo_objects if prev else []

@@ -130,8 +130,32 @@ class SlotSearchExecutor:
 
         return {"slots": slots, "search_request": search_body, "search": search_data, "result": result}
 
+    async def match_faq(self, query: str) -> dict | None:
+        """Детерминированный поиск по FAQ — вызывается до роутера."""
+        own_session = self._session is None
+        sess = self._session or aiohttp.ClientSession()
+        url = f"{self._backend_url}/faq/match"
+        try:
+            async with sess.post(url, json={"query": query}, timeout=5) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+                if isinstance(data, dict):
+                    return data.get("match")
+        except Exception as e:
+            logger.warning(f"FAQ match failed: {e}")
+        finally:
+            if own_session:
+                await sess.close()
+        return None
+
     async def respond_smalltalk(self, query: str) -> str:
         """POST /smalltalk на backend; возвращает готовый текст или '' при ошибке."""
+        details = await self.respond_smalltalk_details(query)
+        return details.get("answer") or ""
+
+    async def respond_smalltalk_details(self, query: str) -> dict:
+        """POST /smalltalk; возвращает {"answer", "source", "faq"} — для ответа и debug-панели."""
         own_session = self._session is None
         sess = self._session or aiohttp.ClientSession()
         url = f"{self._backend_url}/smalltalk"
@@ -140,12 +164,18 @@ class SlotSearchExecutor:
                 if resp.status != 200:
                     text = await resp.text()
                     logger.warning(f"Smalltalk HTTP {resp.status}: {text[:200]}")
-                    return ""
+                    return {}
                 data = await resp.json(content_type=None)
-                return (data.get("answer") or "").strip()
+                if not isinstance(data, dict):
+                    return {}
+                return {
+                    "answer": (data.get("answer") or "").strip(),
+                    "source": data.get("source"),
+                    "faq": data.get("faq"),
+                }
         except Exception as e:
             logger.error(f"Smalltalk call failed: {e}")
-            return ""
+            return {}
         finally:
             if own_session:
                 await sess.close()

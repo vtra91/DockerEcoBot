@@ -48,6 +48,7 @@ services:
     volumes:
       - ./maps:/app/maps
       - ./salut_bot/images:/app/images
+      - ./salut_bot/faq:/app/faq
       - ./salut_bot/embedding_models:/app/embedding_models
       - ./salut_bot/knowledge_base_scripts/Vector/faiss_index:/app/knowledge_base_scripts/Vector/faiss_index
       - ./logs:/app/logs
@@ -58,6 +59,7 @@ services:
       - DB_HOST=db
       - REDIS_HOST=redis
       - RAG_ORCHESTRATOR_URL=http://rag-orchestrator:8000
+      - FAQ_PATH=/app/faq/faq.json
       - BASE_PATH=${BASE_PATH:-/ecoassistant}
     extra_hosts:
       - "host.docker.internal:host-gateway"

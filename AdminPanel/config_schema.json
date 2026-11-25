@@ -74,6 +74,15 @@
           "reload": "instant"
         },
         {
+          "key": "semantic_router",
+          "label": "БЯМ-роутер",
+          "desc": "Семантический сортировщик сообщений: брань / small-talk / поиск",
+          "type": "toggle",
+          "source": "redis",
+          "redis_key": "settings:semantic_router",
+          "reload": "instant"
+        },
+        {
           "key": "MAX_BOT_TOKEN",
           "label": "Токен MAX бота",
           "desc": "Токен бота платформы MAX — получается в личном кабинете MAX",
@@ -129,6 +138,12 @@
       "id": "prompts",
       "title": "Промпты",
       "badge": "мгновенно",
+      "fields": []
+    },
+    {
+      "id": "faq",
+      "title": "FAQ",
+      "badge": "backend",
       "fields": []
     }
   ]

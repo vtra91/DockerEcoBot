@@ -48,9 +48,11 @@ async def search_pipeline(request: Request, data: dict = Body(...)):
     user_id: str | None = data.get("user_id") or None
     promo_enabled: bool | None = data.get("promo_enabled")
     multi_act_enabled: bool | None = data.get("multi_act_enabled")
+    router_enabled: bool | None = data.get("router_enabled")
     orchestrator = _make_orchestrator(request)
     return await orchestrator.process(query, user_id=user_id, promo_enabled=promo_enabled,
-                                      multi_act_enabled=multi_act_enabled)
+                                      multi_act_enabled=multi_act_enabled,
+                                      router_enabled=router_enabled)
 
 
 @router.post("/callback_simplify")

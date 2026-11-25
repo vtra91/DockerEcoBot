@@ -17,7 +17,7 @@
             <meta name="viewport" content="width=device-width,
                 initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                #map_4f666ae1e03ed8441b7d10209e2ecf82 {
+                #map_484f3ee7f2697a70a39eaa97ddd56b5b {
                     position: relative;
                     width: 100.0%;
                     height: 100.0%;
@@ -54,14 +54,14 @@
 <body>
     
     
-            <div class="folium-map" id="map_4f666ae1e03ed8441b7d10209e2ecf82" ></div>
+            <div class="folium-map" id="map_484f3ee7f2697a70a39eaa97ddd56b5b" ></div>
         
 </body>
 <script>
     
     
-            var map_4f666ae1e03ed8441b7d10209e2ecf82 = L.map(
-                "map_4f666ae1e03ed8441b7d10209e2ecf82",
+            var map_484f3ee7f2697a70a39eaa97ddd56b5b = L.map(
+                "map_484f3ee7f2697a70a39eaa97ddd56b5b",
                 {
                     center: [52.437967, 105.8731265],
                     crs: L.CRS.EPSG3857,
@@ -79,7 +79,7 @@
 
         
     
-            var tile_layer_014467b9fd42d1e4240eaa981fdb3adb = L.tileLayer(
+            var tile_layer_5849359038a0d0e37cb684a47fccd913 = L.tileLayer(
                 "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
                 {
   "minZoom": 0,
@@ -96,38 +96,38 @@
             );
         
     
-            tile_layer_014467b9fd42d1e4240eaa981fdb3adb.addTo(map_4f666ae1e03ed8441b7d10209e2ecf82);
+            tile_layer_5849359038a0d0e37cb684a47fccd913.addTo(map_484f3ee7f2697a70a39eaa97ddd56b5b);
         
     
-        function geo_json_28eacb004ee854511c4fa98c478e9643_styler(feature) {
+        function geo_json_f3c793ea14ee7ac680623b235e29a0a5_styler(feature) {
             switch(feature.id) {
                 default:
                     return {"color": "#0d47a1", "fillColor": "#1a73e8", "fillOpacity": 0.3, "weight": 2};
             }
         }
 
-        function geo_json_28eacb004ee854511c4fa98c478e9643_onEachFeature(feature, layer) {
+        function geo_json_f3c793ea14ee7ac680623b235e29a0a5_onEachFeature(feature, layer) {
 
             layer.on({
             });
         };
-        var geo_json_28eacb004ee854511c4fa98c478e9643 = L.geoJson(null, {
-                onEachFeature: geo_json_28eacb004ee854511c4fa98c478e9643_onEachFeature,
+        var geo_json_f3c793ea14ee7ac680623b235e29a0a5 = L.geoJson(null, {
+                onEachFeature: geo_json_f3c793ea14ee7ac680623b235e29a0a5_onEachFeature,
             
-                style: geo_json_28eacb004ee854511c4fa98c478e9643_styler,
+                style: geo_json_f3c793ea14ee7ac680623b235e29a0a5_styler,
             ...{
 }
         });
 
-        function geo_json_28eacb004ee854511c4fa98c478e9643_add (data) {
-            geo_json_28eacb004ee854511c4fa98c478e9643
+        function geo_json_f3c793ea14ee7ac680623b235e29a0a5_add (data) {
+            geo_json_f3c793ea14ee7ac680623b235e29a0a5
                 .addData(data);
         }
-            geo_json_28eacb004ee854511c4fa98c478e9643_add({"features": [{"geometry": {"coordinates": [106.883062, 53.015944], "type": "Point"}, "id": "0", "type": "Feature"}], "type": "FeatureCollection"});
+            geo_json_f3c793ea14ee7ac680623b235e29a0a5_add({"features": [{"geometry": {"coordinates": [106.883062, 53.015944], "type": "Point"}, "id": "0", "type": "Feature"}], "type": "FeatureCollection"});
 
         
     
-            geo_json_28eacb004ee854511c4fa98c478e9643.bindTooltip(
+            geo_json_f3c793ea14ee7ac680623b235e29a0a5.bindTooltip(
                 `<div>
                      Ольхонский район, падь Сахюрта
                  </div>`,
@@ -137,55 +137,55 @@
             );
         
     
-        var popup_8ffb47c2d734f0d87ebeb3d0ef43a907 = L.popup({
+        var popup_74b2baad05b238f7abfebdabe104117a = L.popup({
   "maxWidth": 400,
 });
 
         
             
-                var html_93eafae78396b959a0608ec8d3646440 = $(`<div id="html_93eafae78396b959a0608ec8d3646440" style="width: 100.0%; height: 100.0%;">Ольхонский район, падь Сахюрта</div>`)[0];
-                popup_8ffb47c2d734f0d87ebeb3d0ef43a907.setContent(html_93eafae78396b959a0608ec8d3646440);
+                var html_312305b6060bc375aa4a76fdf56ef158 = $(`<div id="html_312305b6060bc375aa4a76fdf56ef158" style="width: 100.0%; height: 100.0%;">Ольхонский район, падь Сахюрта</div>`)[0];
+                popup_74b2baad05b238f7abfebdabe104117a.setContent(html_312305b6060bc375aa4a76fdf56ef158);
             
         
 
-        geo_json_28eacb004ee854511c4fa98c478e9643.bindPopup(popup_8ffb47c2d734f0d87ebeb3d0ef43a907)
+        geo_json_f3c793ea14ee7ac680623b235e29a0a5.bindPopup(popup_74b2baad05b238f7abfebdabe104117a)
         ;
 
         
     
     
-            geo_json_28eacb004ee854511c4fa98c478e9643.addTo(map_4f666ae1e03ed8441b7d10209e2ecf82);
+            geo_json_f3c793ea14ee7ac680623b235e29a0a5.addTo(map_484f3ee7f2697a70a39eaa97ddd56b5b);
         
     
-        function geo_json_74527fdc738c3c278b0c2d6f51eefa5c_styler(feature) {
+        function geo_json_c221f1b13f9b9e35b75c8911c45270e3_styler(feature) {
             switch(feature.id) {
                 default:
                     return {"color": "#0d47a1", "fillColor": "#1a73e8", "fillOpacity": 0.3, "weight": 2};
             }
         }
 
-        function geo_json_74527fdc738c3c278b0c2d6f51eefa5c_onEachFeature(feature, layer) {
+        function geo_json_c221f1b13f9b9e35b75c8911c45270e3_onEachFeature(feature, layer) {
 
             layer.on({
             });
         };
-        var geo_json_74527fdc738c3c278b0c2d6f51eefa5c = L.geoJson(null, {
-                onEachFeature: geo_json_74527fdc738c3c278b0c2d6f51eefa5c_onEachFeature,
+        var geo_json_c221f1b13f9b9e35b75c8911c45270e3 = L.geoJson(null, {
+                onEachFeature: geo_json_c221f1b13f9b9e35b75c8911c45270e3_onEachFeature,
             
-                style: geo_json_74527fdc738c3c278b0c2d6f51eefa5c_styler,
+                style: geo_json_c221f1b13f9b9e35b75c8911c45270e3_styler,
             ...{
 }
         });
 
-        function geo_json_74527fdc738c3c278b0c2d6f51eefa5c_add (data) {
-            geo_json_74527fdc738c3c278b0c2d6f51eefa5c
+        function geo_json_c221f1b13f9b9e35b75c8911c45270e3_add (data) {
+            geo_json_c221f1b13f9b9e35b75c8911c45270e3
                 .addData(data);
         }
-            geo_json_74527fdc738c3c278b0c2d6f51eefa5c_add({"features": [{"geometry": {"coordinates": [104.863191, 51.85999], "type": "Point"}, "id": "0", "type": "Feature"}], "type": "FeatureCollection"});
+            geo_json_c221f1b13f9b9e35b75c8911c45270e3_add({"features": [{"geometry": {"coordinates": [104.863191, 51.85999], "type": "Point"}, "id": "0", "type": "Feature"}], "type": "FeatureCollection"});
 
         
     
-            geo_json_74527fdc738c3c278b0c2d6f51eefa5c.bindTooltip(
+            geo_json_c221f1b13f9b9e35b75c8911c45270e3.bindTooltip(
                 `<div>
                      Иркутский район, пос. Листвянка
                  </div>`,
@@ -195,24 +195,24 @@
             );
         
     
-        var popup_09e40b6d8f46e4fb670937cac3df1aef = L.popup({
+        var popup_daddcc4cda1b03db01bc3549dfef9355 = L.popup({
   "maxWidth": 400,
 });
 
         
             
-                var html_9b76addaa71e7cf5b9efcddd42bbf908 = $(`<div id="html_9b76addaa71e7cf5b9efcddd42bbf908" style="width: 100.0%; height: 100.0%;">Иркутский район, пос. Листвянка</div>`)[0];
-                popup_09e40b6d8f46e4fb670937cac3df1aef.setContent(html_9b76addaa71e7cf5b9efcddd42bbf908);
+                var html_d0abab6a3857af2f1577c11a1e9a51f2 = $(`<div id="html_d0abab6a3857af2f1577c11a1e9a51f2" style="width: 100.0%; height: 100.0%;">Иркутский район, пос. Листвянка</div>`)[0];
+                popup_daddcc4cda1b03db01bc3549dfef9355.setContent(html_d0abab6a3857af2f1577c11a1e9a51f2);
             
         
 
-        geo_json_74527fdc738c3c278b0c2d6f51eefa5c.bindPopup(popup_09e40b6d8f46e4fb670937cac3df1aef)
+        geo_json_c221f1b13f9b9e35b75c8911c45270e3.bindPopup(popup_daddcc4cda1b03db01bc3549dfef9355)
         ;
 
         
     
     
-            geo_json_74527fdc738c3c278b0c2d6f51eefa5c.addTo(map_4f666ae1e03ed8441b7d10209e2ecf82);
+            geo_json_c221f1b13f9b9e35b75c8911c45270e3.addTo(map_484f3ee7f2697a70a39eaa97ddd56b5b);
         
 </script>
 </html>

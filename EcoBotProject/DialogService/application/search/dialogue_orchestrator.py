@@ -348,10 +348,14 @@ def _router_enabled(flag: bool | None) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _short_circuit(answer: str, t0: float) -> dict:
-    """Ответ без поиска — тот же контракт, что у smalltalk-заглушки."""
+def _short_circuit(answer: str, t0: float, slots: dict | None = None) -> dict:
+    """Ответ без поиска — тот же контракт, что у smalltalk-заглушки.
+
+    slots заполняется маршрутной информацией, чтобы debug-панель в админке
+    показывала, какой слой сработал (а не пустой {}).
+    """
     return {
-        "slots": {},
+        "slots": slots or {},
         "result": {"answer": answer},
         "proactive": {},
         "simplifications": [],
@@ -387,15 +391,20 @@ class DialogueOrchestrator:
         # Слой 1: нецензурная лексика — детерминированно, без БЯМ и без поиска.
         if router_on and is_abusive(query):
             logger.info(f"🚫 Abuse blocked: {query[:60]!r}")
-            return _short_circuit(ABUSE_TEXT, t0)
+            return _short_circuit(ABUSE_TEXT, t0, slots={"route": "ABUSE", "template": "ABUSE"})
 
         # Слой 2: быстрый smalltalk (приветствия, благодарности, эмоции).
         if _is_smalltalk(query):
-            answer = await self._executor.respond_smalltalk(query)
+            details = await self._executor.respond_smalltalk_details(query)
+            answer = (details.get("answer") or "").strip()
+            debug_slots = {"route": "SMALLTALK", "template": "SMALLTALK",
+                           "matched_by": "heuristic", "source": details.get("source")}
+            if details.get("faq"):
+                debug_slots["faq"] = details["faq"]
             if not answer:
                 answer = _SMALLTALK_FALLBACK
             logger.info(f"💬 Smalltalk short-circuit: {query[:60]!r}")
-            return _short_circuit(answer, t0)
+            return _short_circuit(answer, t0, slots=debug_slots)
 
         multi_act = multi_act_enabled if multi_act_enabled is not None else True
         turns = await self._history.get_turns(user_id) if (user_id and multi_act) else []
@@ -415,13 +424,18 @@ class DialogueOrchestrator:
                 )
             if route == "ABUSE":
                 logger.info(f"🚫 Abuse blocked by router: {query[:60]!r}")
-                return _short_circuit(ABUSE_TEXT, t0)
+                return _short_circuit(ABUSE_TEXT, t0, slots={"route": "ABUSE", "template": "ABUSE", "matched_by": "router"})
             if route == "SMALLTALK":
-                answer = await self._executor.respond_smalltalk(query)
+                details = await self._executor.respond_smalltalk_details(query)
+                answer = (details.get("answer") or "").strip()
+                debug_slots = {"route": "SMALLTALK", "template": "SMALLTALK",
+                               "matched_by": "router", "source": details.get("source")}
+                if details.get("faq"):
+                    debug_slots["faq"] = details["faq"]
                 if not answer:
                     answer = _SMALLTALK_FALLBACK
                 logger.info(f"💬 Smalltalk by router: {query[:60]!r}")
-                return _short_circuit(answer, t0)
+                return _short_circuit(answer, t0, slots=debug_slots)
 
         # Передаём предыдущий запрос и промо в LLM — для разрешения местоимений
         prev_promo = prev.promo_objects if prev else []

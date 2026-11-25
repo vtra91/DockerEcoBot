@@ -19,6 +19,7 @@ class SmalltalkRequest(BaseModel):
 class SmalltalkResponse(BaseModel):
     answer: str
     source: str = "llm"  # faq | llm | fallback — для логов и отладки
+    faq: dict | None = None  # запись FAQ, если ответ взят из справочника
 
 
 @router.post("/smalltalk", response_model=SmalltalkResponse)
@@ -30,7 +31,7 @@ async def smalltalk(request: SmalltalkRequest):
         hit = FAQService.get().find(request.query)
         if hit:
             logger.info("Smalltalk FAQ hit: id=%s query=%r", hit.get("id"), request.query[:80])
-            return {"answer": hit["answer"], "source": "faq"}
+            return {"answer": hit["answer"], "source": "faq", "faq": hit}
     except Exception as exc:
         logger.warning("FAQ lookup failed, fallback to LLM: %s", exc)
 

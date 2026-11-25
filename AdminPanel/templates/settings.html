@@ -155,17 +155,30 @@ block content %}
           <table class="table table-sm align-middle mb-2">
             <thead>
               <tr>
-                <th style="width: 16%">Идентификатор</th>
-                <th style="width: 14%">Тип</th>
-                <th style="width: 30%">Вопрос</th>
-                <th>Ответ</th>
+                <th style="width: 16%" title="Короткое имя записи для списка и логов. На ответ пользователю не влияет.">Идентификатор</th>
+                <th style="width: 14%" title="Метка категории: «про бота» или «болтовня». Нужна только для порядка и аналитики.">Тип</th>
+                <th style="width: 30%" title="Эталонная формулировка вопроса — главный образец для сравнения.">Вопрос</th>
+                <th title="Готовый текст, который бот отправит дословно, без участия БЯМ.">Ответ</th>
                 <th style="width: 84px"></th>
               </tr>
             </thead>
-            <tbody id="faq-table-body"></tbody>
+            <tbody id="faq-table-body">
+              {% for it in (faq_items or []) %}
+              <tr>
+                <td><code>{{ it.id }}</code></td>
+                <td>{{ 'Про бота' if it.kind == 'meta' else 'Болтовня' }}</td>
+                <td>{{ it.question }}</td>
+                <td>{{ it.answer }}</td>
+                <td class="text-end">
+                  <button type="button" class="btn btn-sm btn-outline-secondary" data-faq-action="edit" data-index="{{ loop.index0 }}" title="Изменить"><i class="bi bi-pencil"></i></button>
+                  <button type="button" class="btn btn-sm btn-outline-danger" data-faq-action="delete" data-index="{{ loop.index0 }}" title="Удалить"><i class="bi bi-trash"></i></button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
           </table>
         </div>
-        <div id="faq-empty" class="text-muted small d-none">
+        <div id="faq-empty" class="text-muted small {% if faq_items %}d-none{% endif %}">
           Записей пока нет — нажмите «Добавить запись».
         </div>
       </div>
@@ -353,62 +366,59 @@ block content %}
   </div>
 </div>
 
-<!-- Модальное окно записи FAQ (вне вкладок: иначе не откроется из скрытой панели) -->
-<div class="modal fade" id="faqModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="faqModalTitle">Запись FAQ</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-      </div>
-      <div class="modal-body">
-        <div class="mb-3">
-          <label class="form-label fw-bold">Идентификатор <span class="var-name">id</span></label>
-          <input class="form-control" id="faq-field-id" placeholder="например, creators">
-          <div class="field-desc">
-            Короткое латинское имя записи — чтобы отличать её в списке и в логах. На ответ
-            пользователю не влияет; можно оставить пустым, тогда имя сгенерируется автоматически.
-          </div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label fw-bold">Тип <span class="var-name">kind</span></label>
-          <select class="form-select" id="faq-field-kind">
-            <option value="meta">Про бота (meta)</option>
-            <option value="chitchat">Свободная болтовня (chitchat)</option>
-          </select>
-          <div class="field-desc">
-            Метка для аналитики и отладки. На механику поиска не влияет: ответ берётся из FAQ
-            в любом случае.
-          </div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label fw-bold">Вопрос <span class="var-name">question</span></label>
-          <input class="form-control" id="faq-field-question" placeholder="например, Кто тебя создал?">
-          <div class="field-desc">
-            Эталонная формулировка — главный образец, с которым сравнивается сообщение пользователя.
-          </div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label fw-bold">Типовые примеры <span class="var-name">aliases</span></label>
-          <textarea class="form-control" id="faq-field-aliases" rows="4" placeholder="По одному варианту в строке"></textarea>
-          <div class="field-desc">
-            Как ещё пользователи могут это спросить — по одному варианту в строке. Больше вариантов —
-            выше шанс попасть в FAQ.
-          </div>
-        </div>
-        <div class="mb-1">
-          <label class="form-label fw-bold">Ответ <span class="var-name">answer</span></label>
-          <textarea class="form-control" id="faq-field-answer" rows="4" placeholder="Готовый текст ответа"></textarea>
-          <div class="field-desc">Текст, который бот отправит дословно, без участия БЯМ.</div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
-        <button type="button" class="btn btn-primary" id="btn-faq-modal-save">Добавить</button>
+<!-- Диалог записи FAQ (нативный <dialog>, не зависит от Bootstrap-JS) -->
+<style>
+  #faqDialog { border: none; border-radius: 16px; padding: 0; width: min(760px, 92vw); }
+  #faqDialog::backdrop { background: rgba(15, 23, 42, 0.45); }
+</style>
+<dialog id="faqDialog">
+  <div class="p-4">
+    <h5 class="mb-3" id="faqDialogTitle">Запись FAQ</h5>
+    <div class="mb-3">
+      <label class="form-label fw-bold" title="Короткое латинское имя записи: различать записи в списке и логах.">Идентификатор <span class="var-name">id</span></label>
+      <input class="form-control" id="faq-field-id" placeholder="например, creators">
+      <div class="field-desc">
+        Нужен, чтобы отличать запись в списке и находить её в логах. На ответ пользователю
+        не влияет; можно оставить пустым — сгенерируется автоматически.
       </div>
     </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold" title="Категория записи: про бота или свободная болтовня.">Тип <span class="var-name">kind</span></label>
+      <select class="form-select" id="faq-field-kind">
+        <option value="meta">Про бота (meta)</option>
+        <option value="chitchat">Свободная болтовня (chitchat)</option>
+      </select>
+      <div class="field-desc">
+        Метка для аналитики и порядка в списке. На механику поиска не влияет: ответ берётся
+        из FAQ в любом случае.
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold" title="Эталонная формулировка — главный образец для сравнения.">Вопрос <span class="var-name">question</span></label>
+      <input class="form-control" id="faq-field-question" placeholder="например, Кто тебя создал?">
+      <div class="field-desc">
+        Главный образец: сообщение пользователя сравнивается в первую очередь с ним.
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold" title="Как ещё спрашивают — по одному варианту в строке.">Типовые примеры <span class="var-name">aliases</span></label>
+      <textarea class="form-control" id="faq-field-aliases" rows="4" placeholder="По одному варианту в строке"></textarea>
+      <div class="field-desc">
+        Другие формулировки того же вопроса — по одной в строке. Больше вариантов — выше шанс
+        попасть в FAQ вместо свободного ответа БЯМ.
+      </div>
+    </div>
+    <div class="mb-1">
+      <label class="form-label fw-bold" title="Готовый текст ответа, отправляется дословно.">Ответ <span class="var-name">answer</span></label>
+      <textarea class="form-control" id="faq-field-answer" rows="4" placeholder="Готовый текст ответа"></textarea>
+      <div class="field-desc">Текст, который бот отправит дословно, без участия БЯМ.</div>
+    </div>
+    <div class="d-flex justify-content-end gap-2 mt-4">
+      <button type="button" class="btn btn-outline-secondary" id="btn-faq-cancel">Отмена</button>
+      <button type="button" class="btn btn-primary" id="btn-faq-save-entry">Добавить</button>
+    </div>
   </div>
-</div>
+</dialog>
 
 <!-- Toast -->
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
@@ -432,9 +442,11 @@ block content %}
 
 <script>
   document.addEventListener("DOMContentLoaded", function () {
-    document
-      .querySelectorAll('[data-bs-toggle="tooltip"]')
-      .forEach((el) => new bootstrap.Tooltip(el));
+    if (window.bootstrap && bootstrap.Tooltip) {
+      document
+        .querySelectorAll('[data-bs-toggle="tooltip"]')
+        .forEach((el) => new bootstrap.Tooltip(el));
+    }
 
     // Promo toggle
     const promoToggle = document.getElementById("toggle-promo_enabled");
@@ -510,10 +522,9 @@ block content %}
       const kindLabels = { meta: "Про бота", chitchat: "Болтовня" };
       const faqJson = document.getElementById("faq-json");
       const faqEmpty = document.getElementById("faq-empty");
-      const faqModalEl = document.getElementById("faqModal");
-      const faqModal = bootstrap.Modal.getOrCreateInstance(faqModalEl);
-      const modalTitle = document.getElementById("faqModalTitle");
-      const modalSave = document.getElementById("btn-faq-modal-save");
+      const faqDialog = document.getElementById("faqDialog");
+      const modalTitle = document.getElementById("faqDialogTitle");
+      const modalSave = document.getElementById("btn-faq-save-entry");
       const fId = document.getElementById("faq-field-id");
       const fKind = document.getElementById("faq-field-kind");
       const fQuestion = document.getElementById("faq-field-question");
@@ -570,10 +581,11 @@ block content %}
         fQuestion.value = it.question || "";
         fAliases.value = (it.aliases || []).join("\n");
         fAnswer.value = it.answer || "";
-        faqModal.show();
+        faqDialog.showModal();
       }
 
       document.getElementById("btn-faq-add").addEventListener("click", () => openFaqModal(-1));
+      document.getElementById("btn-faq-cancel").addEventListener("click", () => faqDialog.close());
 
       modalSave.addEventListener("click", () => {
         const question = fQuestion.value.trim();
@@ -595,7 +607,7 @@ block content %}
           faqState.items.push(item);
         }
         renderFaq();
-        faqModal.hide();
+        faqDialog.close();
         showToast(wasEdit ? "Запись изменена" : "Запись добавлена", "success");
       });
 
@@ -684,6 +696,31 @@ block content %}
 
       renderFaq();
     }
+
+    // ── Запоминаем активную вкладку настроек; сбрасываем при уходе со страницы ──
+    try {
+    const SETTINGS_TAB_KEY = "eco_settings_active_tab";
+    const savedTab = sessionStorage.getItem(SETTINGS_TAB_KEY);
+    if (savedTab) {
+      const savedBtn = document.querySelector('[data-bs-target="#tab-' + savedTab + '"]');
+      if (savedBtn && window.bootstrap && bootstrap.Tab) {
+        bootstrap.Tab.getOrCreateInstance(savedBtn).show();
+      }
+    }
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach((btn) => {
+      btn.addEventListener("shown.bs.tab", (e) => {
+        const target = (e.target.getAttribute("data-bs-target") || "").replace("#tab-", "");
+        if (target) sessionStorage.setItem(SETTINGS_TAB_KEY, target);
+      });
+    });
+    document.querySelectorAll("a[href]").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (!href || href.startsWith("#")) return;
+      if (href.indexOf("/settings") === -1) {
+        a.addEventListener("click", () => sessionStorage.removeItem(SETTINGS_TAB_KEY));
+      }
+    });
+    } catch (e) { /* приватный режим/без storage — не критично */ }
   });
 
   function togglePw(btn) {

@@ -138,20 +138,47 @@ block content %}
         </div>
       </div>
       {% endif %}
-      <div class="mb-3">
-        <label class="form-label fw-bold text-primary">
-          Записи FAQ (JSON)
-        </label>
-        <div class="field-desc">
-          Поля: <code>id</code>, <code>kind</code> (<code>meta</code> /
-          <code>chitchat</code>), <code>question</code>,
-          <code>aliases</code> (список), <code>answer</code>. Ответ из FAQ
-          отдаётся детерминированно, без участия LLM.
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+        <div class="btn-group" role="group" aria-label="Вид FAQ">
+          <input type="radio" class="btn-check" name="faq-view" id="faq-view-list" value="list" checked>
+          <label class="btn btn-outline-primary btn-sm" for="faq-view-list"><i class="bi bi-list-ul me-1"></i>Список</label>
+          <input type="radio" class="btn-check" name="faq-view" id="faq-view-json" value="json">
+          <label class="btn btn-outline-primary btn-sm" for="faq-view-json"><i class="bi bi-braces me-1"></i>JSON</label>
+        </div>
+        <button type="button" class="btn btn-sm btn-primary" id="btn-faq-add">
+          <i class="bi bi-plus-lg me-1"></i>Добавить запись
+        </button>
+      </div>
+
+      <div id="faq-list-view">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-2">
+            <thead>
+              <tr>
+                <th style="width: 16%">Идентификатор</th>
+                <th style="width: 14%">Тип</th>
+                <th style="width: 30%">Вопрос</th>
+                <th>Ответ</th>
+                <th style="width: 84px"></th>
+              </tr>
+            </thead>
+            <tbody id="faq-table-body"></tbody>
+          </table>
+        </div>
+        <div id="faq-empty" class="text-muted small d-none">
+          Записей пока нет — нажмите «Добавить запись».
+        </div>
+      </div>
+
+      <div id="faq-json-view" class="d-none">
+        <div class="field-desc mb-2">
+          То же содержимое в JSON: можно скопировать целиком или вставить свой
+          список и применить.
         </div>
         <textarea
           id="faq-json"
           class="form-control"
-          rows="22"
+          rows="20"
           spellcheck="false"
           style="
             font-family: &quot;JetBrains Mono&quot;, monospace;
@@ -159,15 +186,22 @@ block content %}
             background: #f8fafc;
             border: 1px solid #cbd5e1;
           "
-        >{{ (faq_items or []) | tojson }}</textarea>
+        ></textarea>
+        <div class="mt-2 d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-faq-copy">
+            <i class="bi bi-clipboard me-1"></i>Скопировать JSON
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btn-faq-apply">
+            <i class="bi bi-arrow-repeat me-1"></i>Обновить из JSON
+          </button>
+        </div>
       </div>
+
       <div class="save-bar">
         <button type="button" class="btn btn-primary px-4 fw-bold" id="btn-save-faq">
           Сохранить FAQ
         </button>
-        <span class="save-hint"
-          >Применяется мгновенно — backend перечитывает справочник</span
-        >
+        <span class="save-hint">Применяется мгновенно</span>
       </div>
 
       {% else %} {# ── Обычная вкладка — разбиваем поля на instant и restart ──
@@ -303,7 +337,7 @@ block content %}
         <div class="save-bar">
           <button
             type="button"
-            class="btn btn-warning px-4 fw-bold"
+            class="btn btn-primary px-4 fw-bold"
             onclick="saveShared('form-{{ tab.id }}-restart', '{{ ADMIN_PREFIX }}/settings/shared', 'restart', '{{ tab.restart_cmd }}')"
           >
             Сохранить
@@ -316,6 +350,63 @@ block content %}
       {% endif %} {% endif %}
     </div>
     {% endfor %}
+  </div>
+</div>
+
+<!-- Модальное окно записи FAQ (вне вкладок: иначе не откроется из скрытой панели) -->
+<div class="modal fade" id="faqModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="faqModalTitle">Запись FAQ</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label fw-bold">Идентификатор <span class="var-name">id</span></label>
+          <input class="form-control" id="faq-field-id" placeholder="например, creators">
+          <div class="field-desc">
+            Короткое латинское имя записи — чтобы отличать её в списке и в логах. На ответ
+            пользователю не влияет; можно оставить пустым, тогда имя сгенерируется автоматически.
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-bold">Тип <span class="var-name">kind</span></label>
+          <select class="form-select" id="faq-field-kind">
+            <option value="meta">Про бота (meta)</option>
+            <option value="chitchat">Свободная болтовня (chitchat)</option>
+          </select>
+          <div class="field-desc">
+            Метка для аналитики и отладки. На механику поиска не влияет: ответ берётся из FAQ
+            в любом случае.
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-bold">Вопрос <span class="var-name">question</span></label>
+          <input class="form-control" id="faq-field-question" placeholder="например, Кто тебя создал?">
+          <div class="field-desc">
+            Эталонная формулировка — главный образец, с которым сравнивается сообщение пользователя.
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-bold">Типовые примеры <span class="var-name">aliases</span></label>
+          <textarea class="form-control" id="faq-field-aliases" rows="4" placeholder="По одному варианту в строке"></textarea>
+          <div class="field-desc">
+            Как ещё пользователи могут это спросить — по одному варианту в строке. Больше вариантов —
+            выше шанс попасть в FAQ.
+          </div>
+        </div>
+        <div class="mb-1">
+          <label class="form-label fw-bold">Ответ <span class="var-name">answer</span></label>
+          <textarea class="form-control" id="faq-field-answer" rows="4" placeholder="Готовый текст ответа"></textarea>
+          <div class="field-desc">Текст, который бот отправит дословно, без участия БЯМ.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-faq-modal-save">Добавить</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -409,31 +500,177 @@ block content %}
       });
     }
 
-    // FAQ: форматируем JSON при открытии и сохраняем в backend
-    const faqArea = document.getElementById("faq-json");
-    if (faqArea) {
-      try {
-        faqArea.value = JSON.stringify(JSON.parse(faqArea.value), null, 2);
-      } catch (e) {
-        // оставляем как есть — пользователь увидит ошибку при сохранении
-      }
-    }
+    // ── FAQ: список сущностей + JSON-вид ──
+    const faqBody = document.getElementById("faq-table-body");
+    if (faqBody) {
+      const faqState = {
+        items: {{ (faq_items or []) | tojson }},
+        editIndex: -1,
+      };
+      const kindLabels = { meta: "Про бота", chitchat: "Болтовня" };
+      const faqJson = document.getElementById("faq-json");
+      const faqEmpty = document.getElementById("faq-empty");
+      const faqModalEl = document.getElementById("faqModal");
+      const faqModal = bootstrap.Modal.getOrCreateInstance(faqModalEl);
+      const modalTitle = document.getElementById("faqModalTitle");
+      const modalSave = document.getElementById("btn-faq-modal-save");
+      const fId = document.getElementById("faq-field-id");
+      const fKind = document.getElementById("faq-field-kind");
+      const fQuestion = document.getElementById("faq-field-question");
+      const fAliases = document.getElementById("faq-field-aliases");
+      const fAnswer = document.getElementById("faq-field-answer");
 
-    const faqSave = document.getElementById("btn-save-faq");
-    if (faqSave) {
-      faqSave.addEventListener("click", async () => {
-        let items;
+      const esc = (v) =>
+        String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        }[c]));
+
+      const truncate = (v, n) => {
+        const s = String(v || "");
+        return s.length > n ? s.slice(0, n - 1) + "…" : s;
+      };
+
+      function renderFaq() {
+        if (!faqState.items.length) {
+          faqBody.innerHTML = "";
+          faqEmpty.classList.remove("d-none");
+        } else {
+          faqEmpty.classList.add("d-none");
+          faqBody.innerHTML = faqState.items
+            .map((it, i) => `
+            <tr>
+              <td><code>${esc(it.id)}</code></td>
+              <td>${esc(kindLabels[it.kind] || it.kind || "")}</td>
+              <td>${esc(truncate(it.question, 60))}</td>
+              <td>${esc(truncate(it.answer, 90))}</td>
+              <td class="text-end">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-faq-action="edit" data-index="${i}" title="Изменить"><i class="bi bi-pencil"></i></button>
+                <button type="button" class="btn btn-sm btn-outline-danger" data-faq-action="delete" data-index="${i}" title="Удалить"><i class="bi bi-trash"></i></button>
+              </td>
+            </tr>`)
+            .join("");
+        }
+        faqJson.value = JSON.stringify(faqState.items, null, 2);
+      }
+
+      function openFaqModal(index) {
+        faqState.editIndex = index;
+        const isEdit = index >= 0;
+        const it = isEdit
+          ? faqState.items[index]
+          : { id: "", kind: "meta", question: "", aliases: [], answer: "" };
+        modalTitle.textContent = isEdit ? "Изменить запись FAQ" : "Новая запись FAQ";
+        modalSave.textContent = isEdit ? "Сохранить" : "Добавить";
+        fId.value = it.id || "";
+        fKind.value = it.kind || "meta";
+        fQuestion.value = it.question || "";
+        fAliases.value = (it.aliases || []).join("\n");
+        fAnswer.value = it.answer || "";
+        faqModal.show();
+      }
+
+      document.getElementById("btn-faq-add").addEventListener("click", () => openFaqModal(-1));
+
+      modalSave.addEventListener("click", () => {
+        const question = fQuestion.value.trim();
+        const answer = fAnswer.value.trim();
+        if (!question || !answer) {
+          showToast("Заполните вопрос и ответ", "danger");
+          return;
+        }
+        const id = fId.value.trim() || "faq_" + Date.now();
+        const aliases = fAliases.value
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const item = { id, kind: fKind.value, question, aliases, answer };
+        const wasEdit = faqState.editIndex >= 0;
+        if (wasEdit) {
+          faqState.items[faqState.editIndex] = item;
+        } else {
+          faqState.items.push(item);
+        }
+        renderFaq();
+        faqModal.hide();
+        showToast(wasEdit ? "Запись изменена" : "Запись добавлена", "success");
+      });
+
+      faqBody.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-faq-action]");
+        if (!btn) return;
+        const idx = Number(btn.dataset.index);
+        if (btn.dataset.faqAction === "edit") {
+          openFaqModal(idx);
+          return;
+        }
+        if (btn.dataset.faqAction === "delete") {
+          const title = faqState.items[idx] ? faqState.items[idx].question : "запись";
+          if (!confirm("Удалить запись «" + title + "»?")) return;
+          faqState.items.splice(idx, 1);
+          renderFaq();
+          showToast("Запись удалена", "warning");
+        }
+      });
+
+      document.getElementById("faq-view-list").addEventListener("change", (e) => {
+        if (!e.target.checked) return;
+        document.getElementById("faq-list-view").classList.remove("d-none");
+        document.getElementById("faq-json-view").classList.add("d-none");
+      });
+
+      document.getElementById("faq-view-json").addEventListener("change", (e) => {
+        if (!e.target.checked) return;
+        faqJson.value = JSON.stringify(faqState.items, null, 2);
+        document.getElementById("faq-list-view").classList.add("d-none");
+        document.getElementById("faq-json-view").classList.remove("d-none");
+      });
+
+      document.getElementById("btn-faq-copy").addEventListener("click", async () => {
         try {
-          items = JSON.parse(document.getElementById("faq-json").value);
+          await navigator.clipboard.writeText(faqJson.value);
+          showToast("JSON скопирован", "success");
+        } catch (e) {
+          showToast("Не удалось скопировать", "danger");
+        }
+      });
+
+      document.getElementById("btn-faq-apply").addEventListener("click", () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(faqJson.value);
         } catch (e) {
           showToast("Некорректный JSON: " + e.message, "danger");
           return;
         }
+        if (!Array.isArray(parsed)) {
+          showToast("Ожидается список записей (массив)", "danger");
+          return;
+        }
+        faqState.items = parsed
+          .map((raw, i) => ({
+            id: String(raw.id || "faq_" + (i + 1)),
+            kind: raw.kind === "chitchat" ? "chitchat" : "meta",
+            question: String(raw.question || "").trim(),
+            aliases: Array.isArray(raw.aliases)
+              ? raw.aliases.map(String).map((s) => s.trim()).filter(Boolean)
+              : [],
+            answer: String(raw.answer || "").trim(),
+          }))
+          .filter((x) => x.question && x.answer);
+        renderFaq();
+        showToast("Список обновлён из JSON: " + faqState.items.length + " записей", "success");
+      });
+
+      document.getElementById("btn-save-faq").addEventListener("click", async () => {
         try {
           const resp = await fetch("{{ ADMIN_PREFIX }}/settings/faq", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ items }),
+            body: JSON.stringify({ items: faqState.items }),
           });
           const data = await resp.json();
           if (!resp.ok) {
@@ -444,6 +681,8 @@ block content %}
           showToast("Ошибка сохранения: " + e.message, "danger");
         }
       });
+
+      renderFaq();
     }
   });
 

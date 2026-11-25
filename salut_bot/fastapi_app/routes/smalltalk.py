@@ -9,7 +9,7 @@ from search_api.services.llm_answer_generator import LLMAnswerGenerator
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_FALLBACK = "Привет! Я Экоассистент Байкальского музея. Спросите о флоре, фауне или местах Байкала."
+_FALLBACK = "Я — Экоассистент Байкальского музея. Спросите о флоре, фауне или местах Байкала."
 
 
 class SmalltalkRequest(BaseModel):

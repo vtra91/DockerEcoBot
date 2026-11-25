@@ -65,6 +65,3 @@ python-multipart==0.0.9
 asyncpg==0.30.0
 maxapi==1.0.0
 Pillow==11.2.1
-
-# Small-talk: фильтр нецензурной лексики (словарь живёт в пакете, не в репозитории)
-profanity-filter==1.2.3

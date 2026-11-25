@@ -66,7 +66,20 @@ _PRONOUNS = {
     "им", "ним", "ними", "ней", "нем", "нём", "него", "нее", "неё",
     "этого", "эту", "этой", "этих", "этот", "эта", "эти",
 }
-_SMALLTALK_FALLBACK = "Привет! Я Экоассистент Байкальского музея. Спросите о флоре, фауне или местах Байкала."
+_SMALLTALK_FALLBACK = "Я — Экоассистент Байкальского музея. Спросите о флоре, фауне или местах Байкала."
+
+# Только те местоимения, которые указывают на объект из прошлого ответа.
+# «это/этот/эта» сюда не входят: они чаще означают «этот факт», а не объект.
+_OBJECT_PRONOUNS = {
+    "он", "она", "они", "оно", "его", "ее", "её", "их", "ему", "ей",
+    "им", "ним", "ними", "ней", "нем", "нём", "него", "нее", "неё",
+}
+
+
+def _mentions_previous(query: str) -> bool:
+    """Ссылается ли реплика на прошлый объект («а у неё как дела», «а он где»)."""
+    words = set(re.findall(r"[а-яa-z]+", query.lower().replace("ё", "е")))
+    return bool(words & _OBJECT_PRONOUNS)
 
 
 def _is_smalltalk(query: str) -> bool:
@@ -391,9 +404,15 @@ class DialogueOrchestrator:
         # Слой 3: семантический роутер — длинный хвост smalltalk и брани,
         # который не поймали быстрые проверки.
         if router_on:
-            route = await get_router(os.getenv("LLM_PROVIDER", "qwen")).route(
-                query, prev_query=prev.query if prev else None
-            )
+            # Продолжение разговора об объекте («а у неё как дела», «а он где?»)
+            # всегда поиск — иначе бытовая формулировка уводит в болтовню.
+            if prev and prev.slots.get("synonym") and _mentions_previous(query):
+                route = "SEARCH"
+                logger.info(f"🧭 Route=SEARCH (продолжение об объекте): {query[:60]!r}")
+            else:
+                route = await get_router(os.getenv("LLM_PROVIDER", "qwen")).route(
+                    query, prev_query=prev.query if prev else None
+                )
             if route == "ABUSE":
                 logger.info(f"🚫 Abuse blocked by router: {query[:60]!r}")
                 return _short_circuit(ABUSE_TEXT, t0)

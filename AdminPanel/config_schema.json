@@ -76,7 +76,7 @@
         {
           "key": "semantic_router",
           "label": "БЯМ-роутер",
-          "desc": "Семантический сортировщик сообщений: брань / small-talk / поиск. Выключено — поведение как раньше",
+          "desc": "Семантический сортировщик сообщений: брань / small-talk / поиск",
           "type": "toggle",
           "source": "redis",
           "redis_key": "settings:semantic_router",

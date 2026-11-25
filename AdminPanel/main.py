@@ -680,12 +680,33 @@ async def settings_page(request: Request):
     router_val = await settings_redis.get("settings:semantic_router")
     semantic_router_enabled = router_val == "1"
 
+    # FAQ: серверное управление (без JS) — вкладка, вид, форма, сообщения
+    faq_view = request.query_params.get("view", "list")
+    faq_mode = request.query_params.get("mode", "")
+    edit_id = request.query_params.get("id", "")
+    faq_edit_item = None
+    if faq_mode == "edit" and edit_id and faq_items:
+        faq_edit_item = next((x for x in faq_items if str(x.get("id")) == edit_id), None)
+    faq_msg = request.query_params.get("msg", "")
+    faq_err = request.query_params.get("err", "")
+    active_tab = request.query_params.get("tab") or "llm"
+    faq_edit_aliases = "\n".join(faq_edit_item.get("aliases") or []) if faq_edit_item else ""
+    faq_json_text = json.dumps(faq_items or [], ensure_ascii=False, indent=2)
+
     return templates.TemplateResponse("settings.html", {
         "request": request,
         "active_page": "settings",
         "bot_online": bot_online,
         "prompts": prompts,
         "faq_items": faq_items,
+        "faq_view": faq_view,
+        "faq_mode": faq_mode,
+        "faq_edit_item": faq_edit_item,
+        "faq_msg": faq_msg,
+        "faq_err": faq_err,
+        "faq_edit_aliases": faq_edit_aliases,
+        "active_tab": active_tab,
+        "faq_json_text": faq_json_text,
         "shared": shared,
         "promo_enabled": promo_enabled,
         "multi_act_enabled": multi_act_enabled,
@@ -717,6 +738,95 @@ async def save_faq(request: Request, data: dict = Body(...)):
         if resp.status_code == 200:
             return resp.json()
         raise HTTPException(status_code=500, detail=f"Ошибка сохранения FAQ: {resp.text[:300]}")
+
+
+async def _faq_fetch_items() -> list:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            r = await client.get(f"{BACKEND_BASE}/faq")
+            if r.status_code == 200:
+                return r.json().get("items", []) or []
+        except Exception as e:
+            print(f"[FAQ] fetch error: {e}")
+    return []
+
+
+async def _faq_push_items(items: list) -> bool:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            r = await client.post(f"{BACKEND_BASE}/faq", json={"items": items})
+            return r.status_code == 200
+        except Exception as e:
+            print(f"[FAQ] push error: {e}")
+            return False
+
+
+@app.post("/settings/faq/save")
+async def faq_save(request: Request, id: str = Form(""), kind: str = Form("meta"),
+                   question: str = Form(""), aliases: str = Form(""), answer: str = Form(""),
+                   original_id: str = Form("")):
+    if not request.session.get("user_id"):
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
+    if not question.strip() or not answer.strip():
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/settings?tab=faq&view=list&err=empty", status_code=303)
+
+    items = await _faq_fetch_items()
+    entry = {
+        "id": (id.strip() or original_id.strip() or f"faq_{secrets.token_hex(3)}"),
+        "kind": kind if kind in ("meta", "chitchat") else "meta",
+        "question": question.strip(),
+        "aliases": [a.strip() for a in aliases.splitlines() if a.strip()],
+        "answer": answer.strip(),
+    }
+    replaced = False
+    if original_id:
+        for i, it in enumerate(items):
+            if str(it.get("id")) == original_id:
+                items[i] = entry
+                replaced = True
+                break
+    if not replaced:
+        items.append(entry)
+
+    ok = await _faq_push_items(items)
+    return RedirectResponse(
+        url=f"{ADMIN_PREFIX}/settings?tab=faq&view=list&msg={'saved' if ok else 'backend'}",
+        status_code=303,
+    )
+
+
+@app.post("/settings/faq/delete")
+async def faq_delete(request: Request, id: str = Form("")):
+    if not request.session.get("user_id"):
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
+    items = [x for x in await _faq_fetch_items() if str(x.get("id")) != id]
+    ok = await _faq_push_items(items)
+    return RedirectResponse(
+        url=f"{ADMIN_PREFIX}/settings?tab=faq&view=list&msg={'deleted' if ok else 'backend'}",
+        status_code=303,
+    )
+
+
+@app.post("/settings/faq/json")
+async def faq_json(request: Request, payload: str = Form("")):
+    if not request.session.get("user_id"):
+        return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
+    try:
+        data = json.loads(payload)
+        if not isinstance(data, list):
+            raise ValueError("ожидается массив записей")
+        for item in data:
+            if not isinstance(item, dict) or not item.get("question") or not item.get("answer"):
+                raise ValueError("у каждой записи должны быть question и answer")
+    except Exception:
+        return RedirectResponse(
+            url=f"{ADMIN_PREFIX}/settings?tab=faq&view=json&err=json", status_code=303
+        )
+    ok = await _faq_push_items(data)
+    return RedirectResponse(
+        url=f"{ADMIN_PREFIX}/settings?tab=faq&view=json&msg={'saved' if ok else 'backend'}",
+        status_code=303,
+    )
 
 
 async def _hot_reload_all() -> dict:

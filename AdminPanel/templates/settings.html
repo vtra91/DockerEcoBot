@@ -15,7 +15,7 @@ block content %}
       {% for tab in schema.tabs %}
       <li class="nav-item">
         <button
-          class="nav-link {% if loop.first %}active{% endif %}"
+          class="nav-link {% if tab.id == active_tab %}active{% endif %}"
           data-bs-toggle="tab"
           data-bs-target="#tab-{{ tab.id }}"
           type="button"
@@ -30,7 +30,7 @@ block content %}
   <div class="card-body p-4 tab-content" id="settingsTabContent">
     {% for tab in schema.tabs %}
     <div
-      class="tab-pane fade {% if loop.first %}show active{% endif %}"
+      class="tab-pane fade {% if tab.id == active_tab %}show active{% endif %}"
       id="tab-{{ tab.id }}"
     >
       {% if tab.id == "prompts" %} {# ── Вкладка Промпты — особый случай ── #}
@@ -111,119 +111,118 @@ block content %}
         </div>
       </form>
 
-      {% elif tab.id == "faq" %} {# ── Вкладка FAQ — справочник smalltalk-ответов ── #}
+      {% elif tab.id == "faq" %}
       <div class="section-divider">
         <span class="section-divider-label instant">Мгновенно</span>
       </div>
-      <noscript>
-        <div class="alert alert-warning">
-          JavaScript отключён — редактирование FAQ недоступно.
+
+      {% if faq_msg == 'saved' %}<div class="alert alert-success py-2">FAQ сохранён.</div>{% endif %}
+      {% if faq_msg == 'deleted' %}<div class="alert alert-success py-2">Запись удалена.</div>{% endif %}
+      {% if faq_msg == 'backend' %}<div class="alert alert-danger py-2">Backend не принял изменения — попробуйте позже.</div>{% endif %}
+      {% if faq_err == 'empty' %}<div class="alert alert-danger py-2">Заполните вопрос и ответ.</div>{% endif %}
+      {% if faq_err == 'json' %}<div class="alert alert-danger py-2">Некорректный JSON: нужен массив записей, у каждой question и answer.</div>{% endif %}
+
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+        <div class="btn-group" role="group">
+          <a class="btn btn-sm {% if faq_view == 'list' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&view=list">Список</a>
+          <a class="btn btn-sm {% if faq_view == 'json' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&view=json">JSON</a>
         </div>
-      </noscript>
-      <div id="faq-js-error" class="alert alert-danger d-none mb-3"></div>
-      {% if faq_items is none %}
-      <div
-        class="alert d-flex align-items-center gap-3 mb-4"
-        style="
-          background: #fff7ed;
-          border: 1px solid #fed7aa;
-          border-radius: 12px;
-          padding: 14px 18px;
-        "
-      >
-        <i
-          class="bi bi-exclamation-triangle-fill"
-          style="color: #ea580c; font-size: 1.3rem"
-        ></i>
-        <div>
-          <strong class="text-danger">Backend недоступен</strong>
-          <div class="text-muted" style="font-size: 0.88rem">
-            FAQ не загружен. Убедитесь, что контейнер
-            <code>backend</code> запущен, затем обновите страницу.
-          </div>
+        <a class="btn btn-sm btn-primary" href="?tab=faq&view=list&mode=add#faq-form">Добавить запись</a>
+      </div>
+
+      {% if faq_view == 'json' %}
+      <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/json">
+        <div class="field-desc mb-2">Полный список в JSON. Отредактируйте и нажмите «Сохранить JSON».</div>
+        <textarea name="payload" class="form-control" rows="20" spellcheck="false"
+          style="font-family: &quot;JetBrains Mono&quot;, monospace; font-size: 0.85rem; background: #f8fafc; border: 1px solid #cbd5e1;">{{ faq_json_text }}</textarea>
+        <div class="save-bar">
+          <button type="submit" class="btn btn-primary px-4 fw-bold">Сохранить JSON</button>
+          <a class="btn btn-outline-secondary" href="?tab=faq&view=list">К списку</a>
+        </div>
+      </form>
+      {% else %}
+
+      {% if faq_mode in ('add', 'edit') %}
+      <div class="card mb-3" id="faq-form">
+        <div class="card-body">
+          <h6 class="mb-3">{% if faq_edit_item %}Изменить запись{% else %}Новая запись{% endif %}</h6>
+          <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/save">
+            <input type="hidden" name="original_id" value="{{ faq_edit_item.id if faq_edit_item else '' }}">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label fw-bold">Идентификатор <span class="var-name">id</span></label>
+                <input class="form-control" name="id" value="{{ faq_edit_item.id if faq_edit_item else '' }}" placeholder="например, creators">
+                <div class="field-desc">Имя записи для списка и логов; можно оставить пустым.</div>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label fw-bold">Тип <span class="var-name">kind</span></label>
+                <select class="form-select" name="kind">
+                  <option value="meta" {% if not faq_edit_item or faq_edit_item.kind == 'meta' %}selected{% endif %}>Про бота (meta)</option>
+                  <option value="chitchat" {% if faq_edit_item and faq_edit_item.kind == 'chitchat' %}selected{% endif %}>Болтовня (chitchat)</option>
+                </select>
+                <div class="field-desc">Метка для аналитики; на поиск не влияет.</div>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label fw-bold">Вопрос <span class="var-name">question</span></label>
+                <input class="form-control" name="question" value="{{ faq_edit_item.question if faq_edit_item else '' }}" required>
+                <div class="field-desc">Эталонная формулировка — главный образец сравнения.</div>
+              </div>
+              <div class="col-12">
+                <label class="form-label fw-bold">Подсказки БЯМ <span class="var-name">aliases</span></label>
+                <textarea class="form-control" name="aliases" rows="3" placeholder="По одной формулировке в строке">{{ faq_edit_aliases }}</textarea>
+                <div class="field-desc">Другие формулировки того же вопроса, по одной в строке.</div>
+              </div>
+              <div class="col-12">
+                <label class="form-label fw-bold">Ответ <span class="var-name">answer</span></label>
+                <textarea class="form-control" name="answer" rows="3" required>{{ faq_edit_item.answer if faq_edit_item else '' }}</textarea>
+                <div class="field-desc">Отправляется дословно, без участия БЯМ.</div>
+              </div>
+            </div>
+            <div class="save-bar">
+              <button type="submit" class="btn btn-primary px-4 fw-bold">Сохранить</button>
+              <a class="btn btn-outline-secondary" href="?tab=faq&view=list">Отмена</a>
+            </div>
+          </form>
         </div>
       </div>
       {% endif %}
-      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
-        <div class="btn-group" role="group" aria-label="Вид FAQ">
-          <input type="radio" class="btn-check" name="faq-view" id="faq-view-list" value="list" checked>
-          <label class="btn btn-outline-primary btn-sm" for="faq-view-list"><i class="bi bi-list-ul me-1"></i>Список</label>
-          <input type="radio" class="btn-check" name="faq-view" id="faq-view-json" value="json">
-          <label class="btn btn-outline-primary btn-sm" for="faq-view-json"><i class="bi bi-braces me-1"></i>JSON</label>
-        </div>
-        <button type="button" class="btn btn-sm btn-primary" id="btn-faq-add">
-          <i class="bi bi-plus-lg me-1"></i>Добавить запись
-        </button>
-      </div>
 
-      <div id="faq-list-view">
-        <div class="table-responsive">
-          <table class="table table-sm align-middle mb-2">
-            <thead>
-              <tr>
-                <th style="width: 16%" title="Короткое имя записи для списка и логов. На ответ пользователю не влияет.">Идентификатор</th>
-                <th style="width: 14%" title="Метка категории: «про бота» или «болтовня». Нужна только для порядка и аналитики.">Тип</th>
-                <th style="width: 24%" title="Эталонная формулировка вопроса — главный образец для сравнения.">Вопрос</th>
-                <th title="Другие формулировки того же вопроса — по одной в строке. Помогают БЯМ узнать вопрос в свободной форме.">Подсказки БЯМ</th>
-                <th title="Готовый текст, который бот отправит дословно, без участия БЯМ.">Ответ</th>
-                <th style="width: 84px"></th>
-              </tr>
-            </thead>
-            <tbody id="faq-table-body">
-              {% for it in (faq_items or []) %}
-              <tr>
-                <td><code>{{ it.id }}</code></td>
-                <td>{{ 'Про бота' if it.kind == 'meta' else 'Болтовня' }}</td>
-                <td>{{ it.question }}</td>
-                <td>{{ (it.aliases or []) | join('; ') }}</td>
-                <td>{{ it.answer }}</td>
-                <td class="text-end">
-                  <button type="button" class="btn btn-sm btn-outline-secondary" data-faq-action="edit" data-index="{{ loop.index0 }}" title="Изменить"><i class="bi bi-pencil"></i></button>
-                  <button type="button" class="btn btn-sm btn-outline-danger" data-faq-action="delete" data-index="{{ loop.index0 }}" title="Удалить"><i class="bi bi-trash"></i></button>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        <div id="faq-empty" class="text-muted small {% if faq_items %}d-none{% endif %}">
-          Записей пока нет — нажмите «Добавить запись».
-        </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-2">
+          <thead>
+            <tr>
+              <th style="width: 16%">Идентификатор</th>
+              <th style="width: 12%">Тип</th>
+              <th style="width: 22%">Вопрос</th>
+              <th>Подсказки БЯМ</th>
+              <th>Ответ</th>
+              <th style="width: 96px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in (faq_items or []) %}
+            <tr>
+              <td><code>{{ it.id }}</code></td>
+              <td>{{ 'Про бота' if it.kind == 'meta' else 'Болтовня' }}</td>
+              <td>{{ it.question }}</td>
+              <td>{{ (it.aliases or []) | join('; ') }}</td>
+              <td>{{ it.answer }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-secondary" href="?tab=faq&view=list&mode=edit&id={{ it.id }}#faq-form" title="Изменить"><i class="bi bi-pencil"></i></a>
+                <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/delete" class="d-inline" onsubmit="return confirm('Удалить запись?')">
+                  <input type="hidden" name="id" value="{{ it.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
-
-      <div id="faq-json-view" class="d-none">
-        <div class="field-desc mb-2">
-          То же содержимое в JSON: можно скопировать целиком или вставить свой
-          список и применить.
-        </div>
-        <textarea
-          id="faq-json"
-          class="form-control"
-          rows="20"
-          spellcheck="false"
-          style="
-            font-family: &quot;JetBrains Mono&quot;, monospace;
-            font-size: 0.85rem;
-            background: #f8fafc;
-            border: 1px solid #cbd5e1;
-          "
-        ></textarea>
-        <div class="mt-2 d-flex gap-2">
-          <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-faq-copy">
-            <i class="bi bi-clipboard me-1"></i>Скопировать JSON
-          </button>
-          <button type="button" class="btn btn-sm btn-outline-primary" id="btn-faq-apply">
-            <i class="bi bi-arrow-repeat me-1"></i>Обновить из JSON
-          </button>
-        </div>
-      </div>
-
-      <div class="save-bar">
-        <button type="button" class="btn btn-primary px-4 fw-bold" id="btn-save-faq">
-          Сохранить FAQ
-        </button>
-        <span class="save-hint">Применяется мгновенно</span>
-      </div>
+      {% if not faq_items %}
+      <div class="text-muted small">Записей пока нет — нажмите «Добавить запись».</div>
+      {% endif %}
+      {% endif %}
 
       {% else %} {# ── Обычная вкладка — разбиваем поля на instant и restart ──
       #} {% set instant_fields = tab.fields | selectattr("reload", "equalto",
@@ -374,60 +373,6 @@ block content %}
   </div>
 </div>
 
-<!-- Диалог записи FAQ (нативный <dialog>, не зависит от Bootstrap-JS) -->
-<style>
-  #faqDialog { border: none; border-radius: 16px; padding: 0; width: min(760px, 92vw); }
-  #faqDialog::backdrop { background: rgba(15, 23, 42, 0.45); }
-</style>
-<dialog id="faqDialog">
-  <div class="p-4">
-    <h5 class="mb-3" id="faqDialogTitle">Запись FAQ</h5>
-    <div class="mb-3">
-      <label class="form-label fw-bold" title="Короткое латинское имя записи: различать записи в списке и логах.">Идентификатор <span class="var-name">id</span></label>
-      <input class="form-control" id="faq-field-id" placeholder="например, creators">
-      <div class="field-desc">
-        Нужен, чтобы отличать запись в списке и находить её в логах. На ответ пользователю
-        не влияет; можно оставить пустым — сгенерируется автоматически.
-      </div>
-    </div>
-    <div class="mb-3">
-      <label class="form-label fw-bold" title="Категория записи: про бота или свободная болтовня.">Тип <span class="var-name">kind</span></label>
-      <select class="form-select" id="faq-field-kind">
-        <option value="meta">Про бота (meta)</option>
-        <option value="chitchat">Свободная болтовня (chitchat)</option>
-      </select>
-      <div class="field-desc">
-        Метка для аналитики и порядка в списке. На механику поиска не влияет: ответ берётся
-        из FAQ в любом случае.
-      </div>
-    </div>
-    <div class="mb-3">
-      <label class="form-label fw-bold" title="Эталонная формулировка — главный образец для сравнения.">Вопрос <span class="var-name">question</span></label>
-      <input class="form-control" id="faq-field-question" placeholder="например, Кто тебя создал?">
-      <div class="field-desc">
-        Главный образец: сообщение пользователя сравнивается в первую очередь с ним.
-      </div>
-    </div>
-    <div class="mb-3">
-      <label class="form-label fw-bold" title="Как ещё спрашивают — по одному варианту в строке.">Типовые примеры <span class="var-name">aliases</span></label>
-      <textarea class="form-control" id="faq-field-aliases" rows="4" placeholder="По одному варианту в строке"></textarea>
-      <div class="field-desc">
-        Другие формулировки того же вопроса — по одной в строке. Больше вариантов — выше шанс
-        попасть в FAQ вместо свободного ответа БЯМ.
-      </div>
-    </div>
-    <div class="mb-1">
-      <label class="form-label fw-bold" title="Готовый текст ответа, отправляется дословно.">Ответ <span class="var-name">answer</span></label>
-      <textarea class="form-control" id="faq-field-answer" rows="4" placeholder="Готовый текст ответа"></textarea>
-      <div class="field-desc">Текст, который бот отправит дословно, без участия БЯМ.</div>
-    </div>
-    <div class="d-flex justify-content-end gap-2 mt-4">
-      <button type="button" class="btn btn-outline-secondary" id="btn-faq-cancel">Отмена</button>
-      <button type="button" class="btn btn-primary" id="btn-faq-save-entry">Добавить</button>
-    </div>
-  </div>
-</dialog>
-
 <!-- Toast -->
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
   <div
@@ -518,218 +463,6 @@ block content %}
           showToast("Ошибка при сохранении", "danger");
         }
       });
-    }
-
-    // ── FAQ: список сущностей + JSON-вид ──
-    // Обработчики навешаны на document (делегирование), поэтому не зависят
-    // от того, когда и в каком порядке отрисовались элементы вкладки.
-    try {
-      const faqState = {
-        items: {{ (faq_items or []) | tojson }},
-        editIndex: -1,
-      };
-      const kindLabels = { meta: "Про бота", chitchat: "Болтовня" };
-      const byId = (id) => document.getElementById(id);
-      const esc = (v) =>
-        String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#39;",
-        }[c]));
-      const truncate = (v, n) => {
-        const s = String(v || "");
-        return s.length > n ? s.slice(0, n - 1) + "…" : s;
-      };
-
-      function renderFaq() {
-        const body = byId("faq-table-body");
-        const empty = byId("faq-empty");
-        const json = byId("faq-json");
-        if (body) {
-          body.innerHTML = faqState.items
-            .map((it, i) => `
-            <tr>
-              <td><code>${esc(it.id)}</code></td>
-              <td>${esc(kindLabels[it.kind] || it.kind || "")}</td>
-              <td>${esc(truncate(it.question, 60))}</td>
-              <td>${esc(truncate((it.aliases || []).join("; "), 70))}</td>
-              <td>${esc(truncate(it.answer, 90))}</td>
-              <td class="text-end">
-                <button type="button" class="btn btn-sm btn-outline-secondary" data-faq-action="edit" data-index="${i}" title="Изменить"><i class="bi bi-pencil"></i></button>
-                <button type="button" class="btn btn-sm btn-outline-danger" data-faq-action="delete" data-index="${i}" title="Удалить"><i class="bi bi-trash"></i></button>
-              </td>
-            </tr>`)
-            .join("");
-        }
-        if (empty) empty.classList.toggle("d-none", faqState.items.length > 0);
-        if (json) json.value = JSON.stringify(faqState.items, null, 2);
-      }
-
-      function openFaqModal(index) {
-        faqState.editIndex = index;
-        const isEdit = index >= 0;
-        const it = isEdit
-          ? faqState.items[index]
-          : { id: "", kind: "meta", question: "", aliases: [], answer: "" };
-        const title = byId("faqDialogTitle");
-        const saveBtn = byId("btn-faq-save-entry");
-        if (title) title.textContent = isEdit ? "Изменить запись FAQ" : "Новая запись FAQ";
-        if (saveBtn) saveBtn.textContent = isEdit ? "Сохранить" : "Добавить";
-        if (byId("faq-field-id")) byId("faq-field-id").value = it.id || "";
-        if (byId("faq-field-kind")) byId("faq-field-kind").value = it.kind || "meta";
-        if (byId("faq-field-question")) byId("faq-field-question").value = it.question || "";
-        if (byId("faq-field-aliases")) byId("faq-field-aliases").value = (it.aliases || []).join("\n");
-        if (byId("faq-field-answer")) byId("faq-field-answer").value = it.answer || "";
-        const dlg = byId("faqDialog");
-        if (!dlg) return;
-        if (typeof dlg.showModal === "function") {
-          dlg.showModal();
-        } else {
-          dlg.setAttribute("open", ""); // старый браузер — показываем как блок
-        }
-      }
-
-      function saveFaqEntry() {
-        const qEl = byId("faq-field-question");
-        const aEl = byId("faq-field-answer");
-        const question = qEl ? qEl.value.trim() : "";
-        const answer = aEl ? aEl.value.trim() : "";
-        if (!question || !answer) {
-          showToast("Заполните вопрос и ответ", "danger");
-          return;
-        }
-        const idEl = byId("faq-field-id");
-        const kindEl = byId("faq-field-kind");
-        const alEl = byId("faq-field-aliases");
-        const item = {
-          id: (idEl && idEl.value.trim()) || "faq_" + Date.now(),
-          kind: (kindEl && kindEl.value) || "meta",
-          question,
-          aliases: (alEl ? alEl.value : "")
-            .split("\n")
-            .map((x) => x.trim())
-            .filter(Boolean),
-          answer,
-        };
-        const wasEdit = faqState.editIndex >= 0;
-        if (wasEdit) {
-          faqState.items[faqState.editIndex] = item;
-        } else {
-          faqState.items.push(item);
-        }
-        renderFaq();
-        const dlg = byId("faqDialog");
-        if (dlg) {
-          if (typeof dlg.close === "function") dlg.close();
-          else dlg.removeAttribute("open");
-        }
-        showToast(wasEdit ? "Запись изменена" : "Запись добавлена", "success");
-      }
-
-      function applyFaqJson() {
-        const json = byId("faq-json");
-        if (!json) return;
-        let parsed;
-        try {
-          parsed = JSON.parse(json.value);
-        } catch (e) {
-          showToast("Некорректный JSON: " + e.message, "danger");
-          return;
-        }
-        if (!Array.isArray(parsed)) {
-          showToast("Ожидается список записей (массив)", "danger");
-          return;
-        }
-        faqState.items = parsed
-          .map((raw, i) => ({
-            id: String(raw.id || "faq_" + (i + 1)),
-            kind: raw.kind === "chitchat" ? "chitchat" : "meta",
-            question: String(raw.question || "").trim(),
-            aliases: Array.isArray(raw.aliases)
-              ? raw.aliases.map(String).map((x) => x.trim()).filter(Boolean)
-              : [],
-            answer: String(raw.answer || "").trim(),
-          }))
-          .filter((x) => x.question && x.answer);
-        renderFaq();
-        showToast("Список обновлён из JSON: " + faqState.items.length + " записей", "success");
-      }
-
-      async function saveFaqAll() {
-        try {
-          const resp = await fetch("{{ ADMIN_PREFIX }}/settings/faq", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ items: faqState.items }),
-          });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(data.detail || "ошибка сохранения");
-          showToast("FAQ сохранён: " + data.count + " записей", "success");
-        } catch (e) {
-          showToast("Ошибка сохранения: " + e.message, "danger");
-        }
-      }
-
-      document.addEventListener("click", (e) => {
-        const t = e.target;
-        if (!t || !t.closest) return;
-        if (t.closest("#btn-faq-add")) { openFaqModal(-1); return; }
-        if (t.closest("#btn-faq-cancel")) { const d = byId("faqDialog"); if (d) d.close(); return; }
-        if (t.closest("#btn-faq-save-entry")) { saveFaqEntry(); return; }
-        if (t.closest("#btn-faq-copy")) {
-          const json = byId("faq-json");
-          if (json && navigator.clipboard) {
-            navigator.clipboard.writeText(json.value).then(
-              () => showToast("JSON скопирован", "success"),
-              () => showToast("Не удалось скопировать", "danger"),
-            );
-          }
-          return;
-        }
-        if (t.closest("#btn-faq-apply")) { applyFaqJson(); return; }
-        if (t.closest("#btn-save-faq")) { saveFaqAll(); return; }
-        const actionBtn = t.closest("[data-faq-action]");
-        if (actionBtn) {
-          const idx = Number(actionBtn.dataset.index);
-          if (actionBtn.dataset.faqAction === "edit") { openFaqModal(idx); return; }
-          if (actionBtn.dataset.faqAction === "delete") {
-            const title = faqState.items[idx] ? faqState.items[idx].question : "запись";
-            if (!confirm("Удалить запись «" + title + "»?")) return;
-            faqState.items.splice(idx, 1);
-            renderFaq();
-            showToast("Запись удалена", "warning");
-          }
-        }
-      });
-
-      document.addEventListener("change", (e) => {
-        const t = e.target;
-        if (!t || !t.id) return;
-        const list = byId("faq-list-view");
-        const jsonView = byId("faq-json-view");
-        if (t.id === "faq-view-list" && t.checked) {
-          if (list) list.classList.remove("d-none");
-          if (jsonView) jsonView.classList.add("d-none");
-        }
-        if (t.id === "faq-view-json" && t.checked) {
-          const area = byId("faq-json");
-          if (area) area.value = JSON.stringify(faqState.items, null, 2);
-          if (list) list.classList.add("d-none");
-          if (jsonView) jsonView.classList.remove("d-none");
-        }
-      });
-
-      renderFaq();
-      console.log("[FAQ] initialized, entries:", faqState.items.length);
-    } catch (e) {
-      console.error("FAQ init error:", e);
-      const box = document.getElementById("faq-js-error");
-      if (box) {
-        box.textContent = "Ошибка инициализации FAQ: " + e.message;
-        box.classList.remove("d-none");
-      }
     }
 
     // ── Запоминаем активную вкладку настроек; сбрасываем при уходе со страницы ──

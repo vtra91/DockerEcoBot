@@ -157,7 +157,8 @@ block content %}
               <tr>
                 <th style="width: 16%" title="Короткое имя записи для списка и логов. На ответ пользователю не влияет.">Идентификатор</th>
                 <th style="width: 14%" title="Метка категории: «про бота» или «болтовня». Нужна только для порядка и аналитики.">Тип</th>
-                <th style="width: 30%" title="Эталонная формулировка вопроса — главный образец для сравнения.">Вопрос</th>
+                <th style="width: 24%" title="Эталонная формулировка вопроса — главный образец для сравнения.">Вопрос</th>
+                <th title="Другие формулировки того же вопроса — по одной в строке. Помогают БЯМ узнать вопрос в свободной форме.">Подсказки БЯМ</th>
                 <th title="Готовый текст, который бот отправит дословно, без участия БЯМ.">Ответ</th>
                 <th style="width: 84px"></th>
               </tr>
@@ -168,6 +169,7 @@ block content %}
                 <td><code>{{ it.id }}</code></td>
                 <td>{{ 'Про бота' if it.kind == 'meta' else 'Болтовня' }}</td>
                 <td>{{ it.question }}</td>
+                <td>{{ (it.aliases or []) | join('; ') }}</td>
                 <td>{{ it.answer }}</td>
                 <td class="text-end">
                   <button type="button" class="btn btn-sm btn-outline-secondary" data-faq-action="edit" data-index="{{ loop.index0 }}" title="Изменить"><i class="bi bi-pencil"></i></button>
@@ -513,24 +515,15 @@ block content %}
     }
 
     // ── FAQ: список сущностей + JSON-вид ──
-    const faqBody = document.getElementById("faq-table-body");
-    if (faqBody) {
+    // Обработчики навешаны на document (делегирование), поэтому не зависят
+    // от того, когда и в каком порядке отрисовались элементы вкладки.
+    try {
       const faqState = {
         items: {{ (faq_items or []) | tojson }},
         editIndex: -1,
       };
       const kindLabels = { meta: "Про бота", chitchat: "Болтовня" };
-      const faqJson = document.getElementById("faq-json");
-      const faqEmpty = document.getElementById("faq-empty");
-      const faqDialog = document.getElementById("faqDialog");
-      const modalTitle = document.getElementById("faqDialogTitle");
-      const modalSave = document.getElementById("btn-faq-save-entry");
-      const fId = document.getElementById("faq-field-id");
-      const fKind = document.getElementById("faq-field-kind");
-      const fQuestion = document.getElementById("faq-field-question");
-      const fAliases = document.getElementById("faq-field-aliases");
-      const fAnswer = document.getElementById("faq-field-answer");
-
+      const byId = (id) => document.getElementById(id);
       const esc = (v) =>
         String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({
           "&": "&amp;",
@@ -539,24 +532,23 @@ block content %}
           '"': "&quot;",
           "'": "&#39;",
         }[c]));
-
       const truncate = (v, n) => {
         const s = String(v || "");
         return s.length > n ? s.slice(0, n - 1) + "…" : s;
       };
 
       function renderFaq() {
-        if (!faqState.items.length) {
-          faqBody.innerHTML = "";
-          faqEmpty.classList.remove("d-none");
-        } else {
-          faqEmpty.classList.add("d-none");
-          faqBody.innerHTML = faqState.items
+        const body = byId("faq-table-body");
+        const empty = byId("faq-empty");
+        const json = byId("faq-json");
+        if (body) {
+          body.innerHTML = faqState.items
             .map((it, i) => `
             <tr>
               <td><code>${esc(it.id)}</code></td>
               <td>${esc(kindLabels[it.kind] || it.kind || "")}</td>
               <td>${esc(truncate(it.question, 60))}</td>
+              <td>${esc(truncate((it.aliases || []).join("; "), 70))}</td>
               <td>${esc(truncate(it.answer, 90))}</td>
               <td class="text-end">
                 <button type="button" class="btn btn-sm btn-outline-secondary" data-faq-action="edit" data-index="${i}" title="Изменить"><i class="bi bi-pencil"></i></button>
@@ -565,7 +557,8 @@ block content %}
             </tr>`)
             .join("");
         }
-        faqJson.value = JSON.stringify(faqState.items, null, 2);
+        if (empty) empty.classList.toggle("d-none", faqState.items.length > 0);
+        if (json) json.value = JSON.stringify(faqState.items, null, 2);
       }
 
       function openFaqModal(index) {
@@ -574,32 +567,45 @@ block content %}
         const it = isEdit
           ? faqState.items[index]
           : { id: "", kind: "meta", question: "", aliases: [], answer: "" };
-        modalTitle.textContent = isEdit ? "Изменить запись FAQ" : "Новая запись FAQ";
-        modalSave.textContent = isEdit ? "Сохранить" : "Добавить";
-        fId.value = it.id || "";
-        fKind.value = it.kind || "meta";
-        fQuestion.value = it.question || "";
-        fAliases.value = (it.aliases || []).join("\n");
-        fAnswer.value = it.answer || "";
-        faqDialog.showModal();
+        const title = byId("faqDialogTitle");
+        const saveBtn = byId("btn-faq-save-entry");
+        if (title) title.textContent = isEdit ? "Изменить запись FAQ" : "Новая запись FAQ";
+        if (saveBtn) saveBtn.textContent = isEdit ? "Сохранить" : "Добавить";
+        if (byId("faq-field-id")) byId("faq-field-id").value = it.id || "";
+        if (byId("faq-field-kind")) byId("faq-field-kind").value = it.kind || "meta";
+        if (byId("faq-field-question")) byId("faq-field-question").value = it.question || "";
+        if (byId("faq-field-aliases")) byId("faq-field-aliases").value = (it.aliases || []).join("\n");
+        if (byId("faq-field-answer")) byId("faq-field-answer").value = it.answer || "";
+        const dlg = byId("faqDialog");
+        if (dlg && typeof dlg.showModal === "function") {
+          dlg.showModal();
+        } else {
+          showToast("Браузер не поддерживает <dialog>", "danger");
+        }
       }
 
-      document.getElementById("btn-faq-add").addEventListener("click", () => openFaqModal(-1));
-      document.getElementById("btn-faq-cancel").addEventListener("click", () => faqDialog.close());
-
-      modalSave.addEventListener("click", () => {
-        const question = fQuestion.value.trim();
-        const answer = fAnswer.value.trim();
+      function saveFaqEntry() {
+        const qEl = byId("faq-field-question");
+        const aEl = byId("faq-field-answer");
+        const question = qEl ? qEl.value.trim() : "";
+        const answer = aEl ? aEl.value.trim() : "";
         if (!question || !answer) {
           showToast("Заполните вопрос и ответ", "danger");
           return;
         }
-        const id = fId.value.trim() || "faq_" + Date.now();
-        const aliases = fAliases.value
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        const item = { id, kind: fKind.value, question, aliases, answer };
+        const idEl = byId("faq-field-id");
+        const kindEl = byId("faq-field-kind");
+        const alEl = byId("faq-field-aliases");
+        const item = {
+          id: (idEl && idEl.value.trim()) || "faq_" + Date.now(),
+          kind: (kindEl && kindEl.value) || "meta",
+          question,
+          aliases: (alEl ? alEl.value : "")
+            .split("\n")
+            .map((x) => x.trim())
+            .filter(Boolean),
+          answer,
+        };
         const wasEdit = faqState.editIndex >= 0;
         if (wasEdit) {
           faqState.items[faqState.editIndex] = item;
@@ -607,53 +613,17 @@ block content %}
           faqState.items.push(item);
         }
         renderFaq();
-        faqDialog.close();
+        const dlg = byId("faqDialog");
+        if (dlg && typeof dlg.close === "function") dlg.close();
         showToast(wasEdit ? "Запись изменена" : "Запись добавлена", "success");
-      });
+      }
 
-      faqBody.addEventListener("click", (e) => {
-        const btn = e.target.closest("[data-faq-action]");
-        if (!btn) return;
-        const idx = Number(btn.dataset.index);
-        if (btn.dataset.faqAction === "edit") {
-          openFaqModal(idx);
-          return;
-        }
-        if (btn.dataset.faqAction === "delete") {
-          const title = faqState.items[idx] ? faqState.items[idx].question : "запись";
-          if (!confirm("Удалить запись «" + title + "»?")) return;
-          faqState.items.splice(idx, 1);
-          renderFaq();
-          showToast("Запись удалена", "warning");
-        }
-      });
-
-      document.getElementById("faq-view-list").addEventListener("change", (e) => {
-        if (!e.target.checked) return;
-        document.getElementById("faq-list-view").classList.remove("d-none");
-        document.getElementById("faq-json-view").classList.add("d-none");
-      });
-
-      document.getElementById("faq-view-json").addEventListener("change", (e) => {
-        if (!e.target.checked) return;
-        faqJson.value = JSON.stringify(faqState.items, null, 2);
-        document.getElementById("faq-list-view").classList.add("d-none");
-        document.getElementById("faq-json-view").classList.remove("d-none");
-      });
-
-      document.getElementById("btn-faq-copy").addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(faqJson.value);
-          showToast("JSON скопирован", "success");
-        } catch (e) {
-          showToast("Не удалось скопировать", "danger");
-        }
-      });
-
-      document.getElementById("btn-faq-apply").addEventListener("click", () => {
+      function applyFaqJson() {
+        const json = byId("faq-json");
+        if (!json) return;
         let parsed;
         try {
-          parsed = JSON.parse(faqJson.value);
+          parsed = JSON.parse(json.value);
         } catch (e) {
           showToast("Некорректный JSON: " + e.message, "danger");
           return;
@@ -668,16 +638,16 @@ block content %}
             kind: raw.kind === "chitchat" ? "chitchat" : "meta",
             question: String(raw.question || "").trim(),
             aliases: Array.isArray(raw.aliases)
-              ? raw.aliases.map(String).map((s) => s.trim()).filter(Boolean)
+              ? raw.aliases.map(String).map((x) => x.trim()).filter(Boolean)
               : [],
             answer: String(raw.answer || "").trim(),
           }))
           .filter((x) => x.question && x.answer);
         renderFaq();
         showToast("Список обновлён из JSON: " + faqState.items.length + " записей", "success");
-      });
+      }
 
-      document.getElementById("btn-save-faq").addEventListener("click", async () => {
+      async function saveFaqAll() {
         try {
           const resp = await fetch("{{ ADMIN_PREFIX }}/settings/faq", {
             method: "POST",
@@ -685,16 +655,65 @@ block content %}
             body: JSON.stringify({ items: faqState.items }),
           });
           const data = await resp.json();
-          if (!resp.ok) {
-            throw new Error(data.detail || "ошибка сохранения");
-          }
+          if (!resp.ok) throw new Error(data.detail || "ошибка сохранения");
           showToast("FAQ сохранён: " + data.count + " записей", "success");
         } catch (e) {
           showToast("Ошибка сохранения: " + e.message, "danger");
         }
+      }
+
+      document.addEventListener("click", (e) => {
+        const t = e.target;
+        if (!t || !t.closest) return;
+        if (t.closest("#btn-faq-add")) { openFaqModal(-1); return; }
+        if (t.closest("#btn-faq-cancel")) { const d = byId("faqDialog"); if (d) d.close(); return; }
+        if (t.closest("#btn-faq-save-entry")) { saveFaqEntry(); return; }
+        if (t.closest("#btn-faq-copy")) {
+          const json = byId("faq-json");
+          if (json && navigator.clipboard) {
+            navigator.clipboard.writeText(json.value).then(
+              () => showToast("JSON скопирован", "success"),
+              () => showToast("Не удалось скопировать", "danger"),
+            );
+          }
+          return;
+        }
+        if (t.closest("#btn-faq-apply")) { applyFaqJson(); return; }
+        if (t.closest("#btn-save-faq")) { saveFaqAll(); return; }
+        const actionBtn = t.closest("[data-faq-action]");
+        if (actionBtn) {
+          const idx = Number(actionBtn.dataset.index);
+          if (actionBtn.dataset.faqAction === "edit") { openFaqModal(idx); return; }
+          if (actionBtn.dataset.faqAction === "delete") {
+            const title = faqState.items[idx] ? faqState.items[idx].question : "запись";
+            if (!confirm("Удалить запись «" + title + "»?")) return;
+            faqState.items.splice(idx, 1);
+            renderFaq();
+            showToast("Запись удалена", "warning");
+          }
+        }
+      });
+
+      document.addEventListener("change", (e) => {
+        const t = e.target;
+        if (!t || !t.id) return;
+        const list = byId("faq-list-view");
+        const jsonView = byId("faq-json-view");
+        if (t.id === "faq-view-list" && t.checked) {
+          if (list) list.classList.remove("d-none");
+          if (jsonView) jsonView.classList.add("d-none");
+        }
+        if (t.id === "faq-view-json" && t.checked) {
+          const area = byId("faq-json");
+          if (area) area.value = JSON.stringify(faqState.items, null, 2);
+          if (list) list.classList.add("d-none");
+          if (jsonView) jsonView.classList.remove("d-none");
+        }
       });
 
       renderFaq();
+    } catch (e) {
+      console.error("FAQ init error:", e);
     }
 
     // ── Запоминаем активную вкладку настроек; сбрасываем при уходе со страницы ──
@@ -783,6 +802,10 @@ block content %}
       danger: "text-bg-danger",
       warning: "text-bg-warning",
     };
+    if (!toast || !(window.bootstrap && bootstrap.Toast)) {
+      console.log("[toast]", type || "info", msg);
+      return;
+    }
     toast.className = `toast align-items-center border-0 ${colorMap[type] || "text-bg-secondary"}`;
     document.getElementById("toastMessage").innerText = msg;
     new bootstrap.Toast(toast, { delay: 4000 }).show();

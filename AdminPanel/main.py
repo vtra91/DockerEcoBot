@@ -768,7 +768,11 @@ async def faq_save(request: Request, id: str = Form(""), kind: str = Form("meta"
     if not request.session.get("user_id"):
         return RedirectResponse(url=f"{ADMIN_PREFIX}/login")
     if not question.strip() or not answer.strip():
-        return RedirectResponse(url=f"{ADMIN_PREFIX}/settings?tab=faq&view=list&err=empty", status_code=303)
+        if original_id:
+            back = f"{ADMIN_PREFIX}/settings?tab=faq&view=list&mode=edit&id={original_id}&err=empty#faq-modal"
+        else:
+            back = f"{ADMIN_PREFIX}/settings?tab=faq&view=list&mode=add&err=empty#faq-modal"
+        return RedirectResponse(url=back, status_code=303)
 
     items = await _faq_fetch_items()
     entry = {

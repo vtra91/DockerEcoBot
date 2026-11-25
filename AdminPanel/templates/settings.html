@@ -112,6 +112,13 @@ block content %}
       </form>
 
       {% elif tab.id == "faq" %}
+      <style>
+        #faq-modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px; z-index: 1080; }
+        #faq-modal:target { display: flex; }
+        #faq-modal .faq-modal-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.55); }
+        #faq-modal .faq-modal-window { position: relative; width: min(820px, 100%); max-height: 90vh; overflow-y: auto; background: var(--bg-card); color: var(--text-primary); border-radius: 16px; box-shadow: 0 24px 70px rgba(15, 23, 42, 0.35); padding: 24px; }
+        .faq-key { font-family: "JetBrains Mono", monospace; font-weight: 600; color: #dc2626; }
+      </style>
       <div class="section-divider">
         <span class="section-divider-label instant">Мгновенно</span>
       </div>
@@ -124,10 +131,10 @@ block content %}
 
       <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
         <div class="btn-group" role="group">
-          <a class="btn btn-sm {% if faq_view == 'list' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&view=list">Список</a>
-          <a class="btn btn-sm {% if faq_view == 'json' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&view=json">JSON</a>
+          <a class="btn btn-sm {% if faq_view == 'list' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&amp;view=list">Список</a>
+          <a class="btn btn-sm {% if faq_view == 'json' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?tab=faq&amp;view=json">JSON</a>
         </div>
-        <a class="btn btn-sm btn-primary" href="?tab=faq&view=list&mode=add#faq-form">Добавить запись</a>
+        <a class="btn btn-sm btn-primary" href="?tab=faq&amp;view=list&mode=add#faq-modal">Добавить запись</a>
       </div>
 
       {% if faq_view == 'json' %}
@@ -137,50 +144,75 @@ block content %}
           style="font-family: &quot;JetBrains Mono&quot;, monospace; font-size: 0.85rem; background: #f8fafc; border: 1px solid #cbd5e1;">{{ faq_json_text }}</textarea>
         <div class="save-bar">
           <button type="submit" class="btn btn-primary px-4 fw-bold">Сохранить JSON</button>
-          <a class="btn btn-outline-secondary" href="?tab=faq&view=list">К списку</a>
+          <a class="btn btn-outline-secondary" href="?tab=faq&amp;view=list">К списку</a>
         </div>
       </form>
       {% else %}
 
       {% if faq_mode in ('add', 'edit') %}
-      <div class="card mb-3" id="faq-form">
-        <div class="card-body">
-          <h6 class="mb-3">{% if faq_edit_item %}Изменить запись{% else %}Новая запись{% endif %}</h6>
+      <div id="faq-modal">
+        <a class="faq-modal-backdrop" href="?tab=faq&amp;view=list" aria-label="Закрыть"></a>
+        <div class="faq-modal-window" role="dialog" aria-modal="true">
+          <div class="d-flex justify-content-between align-items-start mb-3">
+            <h6 class="mb-0">{% if faq_edit_item %}Изменить правило{% else %}Новое правило{% endif %}</h6>
+            <a class="btn-close" href="?tab=faq&amp;view=list" aria-label="Закрыть"></a>
+          </div>
+          {% if faq_err == 'empty' %}<div class="alert alert-danger py-2">Заполните вопрос и ответ.</div>{% endif %}
           <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/save">
             <input type="hidden" name="original_id" value="{{ faq_edit_item.id if faq_edit_item else '' }}">
             <div class="row g-3">
               <div class="col-md-4">
-                <label class="form-label fw-bold">Идентификатор <span class="var-name">id</span></label>
+                <label class="form-label fw-bold">
+                  <abbr title="Идентификатор правила: нужен для логов и списка, на ответ не влияет.">Идентификатор</abbr>
+                  <span class="faq-key">(id)</span>
+                </label>
                 <input class="form-control" name="id" value="{{ faq_edit_item.id if faq_edit_item else '' }}" placeholder="например, creators">
-                <div class="field-desc">Имя записи для списка и логов; можно оставить пустым.</div>
+                <div class="field-desc">Идентификатор правила. БЯМ напрямую его не использует — нужен для быстрого ориентирования в логах и списке.</div>
               </div>
               <div class="col-md-4">
-                <label class="form-label fw-bold">Тип <span class="var-name">kind</span></label>
+                <label class="form-label fw-bold">
+                  <abbr title="Метка для аналитики и порядка в списке.">Тип правила</abbr>
+                  <span class="faq-key">(kind)</span>
+                </label>
                 <select class="form-select" name="kind">
-                  <option value="meta" {% if not faq_edit_item or faq_edit_item.kind == 'meta' %}selected{% endif %}>Про бота (meta)</option>
-                  <option value="chitchat" {% if faq_edit_item and faq_edit_item.kind == 'chitchat' %}selected{% endif %}>Болтовня (chitchat)</option>
+                  <option value="meta" {% if not faq_edit_item or faq_edit_item.kind == 'meta' %}selected{% endif %}>Информация о боте (meta)</option>
+                  <option value="chitchat" {% if faq_edit_item and faq_edit_item.kind == 'chitchat' %}selected{% endif %}>Свободная болтовня (chitchat)</option>
                 </select>
-                <div class="field-desc">Метка для аналитики; на поиск не влияет.</div>
+                <div class="field-desc">Метка для аналитики и порядка в списке. На поиск и ответ не влияет.</div>
               </div>
               <div class="col-md-4">
-                <label class="form-label fw-bold">Вопрос <span class="var-name">question</span></label>
+                <label class="form-label fw-bold">
+                  <abbr title="Эталонная формулировка: с неё начинается сравнение сообщения.">Вопрос</abbr>
+                  <span class="faq-key">(question)</span>
+                </label>
                 <input class="form-control" name="question" value="{{ faq_edit_item.question if faq_edit_item else '' }}" required>
-                <div class="field-desc">Эталонная формулировка — главный образец сравнения.</div>
+                <div class="field-desc">Эталонная формулировка: с неё начинается сравнение. Если сообщение не совпало с ней достаточно точно, бот переходит к «Подсказкам БЯМ».</div>
               </div>
               <div class="col-12">
-                <label class="form-label fw-bold">Подсказки БЯМ <span class="var-name">aliases</span></label>
+                <label class="form-label fw-bold">
+                  <abbr title="Другие формулировки: бот проверяет их, если эталон не совпал.">Подсказки БЯМ</abbr>
+                  <span class="faq-key">(aliases)</span>
+                </label>
                 <textarea class="form-control" name="aliases" rows="3" placeholder="По одной формулировке в строке">{{ faq_edit_aliases }}</textarea>
-                <div class="field-desc">Другие формулировки того же вопроса, по одной в строке.</div>
+                <div class="field-desc">
+                  Другие формулировки того же вопроса, по одной в строке. Бот сравнивает сообщение с каждой
+                  отдельно: сначала ищет точное совпадение, затем — похожесть слов. Пишите 3–7 живых
+                  вариантов; уточняющие слова вроде «скажи» или «пожалуйста» можно не добавлять — они
+                  не помогают совпадению. Если ничего не подошло — отвечает БЯМ.
+                </div>
               </div>
               <div class="col-12">
-                <label class="form-label fw-bold">Ответ <span class="var-name">answer</span></label>
+                <label class="form-label fw-bold">
+                  <abbr title="Готовый текст ответа, отправляется без участия БЯМ.">Ответ</abbr>
+                  <span class="faq-key">(answer)</span>
+                </label>
                 <textarea class="form-control" name="answer" rows="3" required>{{ faq_edit_item.answer if faq_edit_item else '' }}</textarea>
-                <div class="field-desc">Отправляется дословно, без участия БЯМ.</div>
+                <div class="field-desc">Детерминированный ответ — бот отправляет этот текст без изменений.</div>
               </div>
             </div>
-            <div class="save-bar">
+            <div class="d-flex gap-2 mt-4">
               <button type="submit" class="btn btn-primary px-4 fw-bold">Сохранить</button>
-              <a class="btn btn-outline-secondary" href="?tab=faq&view=list">Отмена</a>
+              <a class="btn btn-outline-secondary" href="?tab=faq&amp;view=list">Отмена</a>
             </div>
           </form>
         </div>
@@ -191,11 +223,11 @@ block content %}
         <table class="table table-sm align-middle mb-2">
           <thead>
             <tr>
-              <th style="width: 16%">Идентификатор</th>
-              <th style="width: 12%">Тип</th>
-              <th style="width: 22%">Вопрос</th>
-              <th>Подсказки БЯМ</th>
-              <th>Ответ</th>
+              <th style="width: 16%"><abbr title="Имя правила для списка и логов. БЯМ его не использует.">Идентификатор</abbr></th>
+              <th style="width: 12%"><abbr title="Категория правила: информация о боте или свободная болтовня. Влияет только на порядок в списке.">Тип правила</abbr></th>
+              <th style="width: 22%"><abbr title="Эталонная формулировка — с неё начинается сравнение сообщения.">Вопрос</abbr></th>
+              <th><abbr title="Варианты формулировок, которые бот проверяет, если эталон не совпал.">Подсказки БЯМ</abbr></th>
+              <th><abbr title="Готовый текст ответа, отправляется без изменений.">Ответ</abbr></th>
               <th style="width: 96px"></th>
             </tr>
           </thead>
@@ -203,12 +235,12 @@ block content %}
             {% for it in (faq_items or []) %}
             <tr>
               <td><code>{{ it.id }}</code></td>
-              <td>{{ 'Про бота' if it.kind == 'meta' else 'Болтовня' }}</td>
+              <td>{{ 'Информация о боте' if it.kind == 'meta' else 'Болтовня' }}</td>
               <td>{{ it.question }}</td>
               <td>{{ (it.aliases or []) | join('; ') }}</td>
               <td>{{ it.answer }}</td>
               <td class="text-end">
-                <a class="btn btn-sm btn-outline-secondary" href="?tab=faq&view=list&mode=edit&id={{ it.id }}#faq-form" title="Изменить"><i class="bi bi-pencil"></i></a>
+                <a class="btn btn-sm btn-outline-secondary" href="?tab=faq&amp;view=list&mode=edit&id={{ it.id }}#faq-modal" title="Изменить"><i class="bi bi-pencil"></i></a>
                 <form method="post" action="{{ ADMIN_PREFIX }}/settings/faq/delete" class="d-inline" onsubmit="return confirm('Удалить запись?')">
                   <input type="hidden" name="id" value="{{ it.id }}">
                   <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить"><i class="bi bi-trash"></i></button>

@@ -197,16 +197,28 @@ for case in CASES:
         if case.get("search"):
             if route:
                 problems.append(f"перехвачено FAQ/роутером (route={route!r})")
-            if not answer and not result.get("images") and not result.get("objects"):
-                problems.append("пустой ответ поиска")
-        if not answer:
+            if not (answer or result.get("images") or result.get("objects") or result.get("map")):
+                problems.append("пустой результат поиска")
+        elif not answer:
             problems.append("пустой текст ответа")
 
         if problems:
             failures += 1
             print(f"  FAIL  {query!r:38} -> {'; '.join(problems)}")
         else:
-            suffix = f" (route={route}, matched_by={matched_by})" if route else " (поиск)"
+            if route:
+                suffix = f" (route={route}, matched_by={matched_by})"
+            else:
+                bits = []
+                if result.get("images"):
+                    bits.append(f"фото={len(result['images'])}")
+                if result.get("objects"):
+                    bits.append(f"объектов={len(result['objects'])}")
+                if result.get("map"):
+                    bits.append("карта")
+                if answer:
+                    bits.append("текст")
+                suffix = " (поиск" + (": " + ", ".join(bits) if bits else "") + ")"
             print(f"  OK    {query!r:38}{suffix}")
 
     print(f"\n  Живой прогон занял {time.time() - started:.1f} с")

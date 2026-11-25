@@ -115,6 +115,12 @@ block content %}
       <div class="section-divider">
         <span class="section-divider-label instant">Мгновенно</span>
       </div>
+      <noscript>
+        <div class="alert alert-warning">
+          JavaScript отключён — редактирование FAQ недоступно.
+        </div>
+      </noscript>
+      <div id="faq-js-error" class="alert alert-danger d-none mb-3"></div>
       {% if faq_items is none %}
       <div
         class="alert d-flex align-items-center gap-3 mb-4"
@@ -443,7 +449,7 @@ block content %}
 </div>
 
 <script>
-  document.addEventListener("DOMContentLoaded", function () {
+  function initSettingsPage() {
     if (window.bootstrap && bootstrap.Tooltip) {
       document
         .querySelectorAll('[data-bs-toggle="tooltip"]')
@@ -577,10 +583,11 @@ block content %}
         if (byId("faq-field-aliases")) byId("faq-field-aliases").value = (it.aliases || []).join("\n");
         if (byId("faq-field-answer")) byId("faq-field-answer").value = it.answer || "";
         const dlg = byId("faqDialog");
-        if (dlg && typeof dlg.showModal === "function") {
+        if (!dlg) return;
+        if (typeof dlg.showModal === "function") {
           dlg.showModal();
         } else {
-          showToast("Браузер не поддерживает <dialog>", "danger");
+          dlg.setAttribute("open", ""); // старый браузер — показываем как блок
         }
       }
 
@@ -614,7 +621,10 @@ block content %}
         }
         renderFaq();
         const dlg = byId("faqDialog");
-        if (dlg && typeof dlg.close === "function") dlg.close();
+        if (dlg) {
+          if (typeof dlg.close === "function") dlg.close();
+          else dlg.removeAttribute("open");
+        }
         showToast(wasEdit ? "Запись изменена" : "Запись добавлена", "success");
       }
 
@@ -712,8 +722,14 @@ block content %}
       });
 
       renderFaq();
+      console.log("[FAQ] initialized, entries:", faqState.items.length);
     } catch (e) {
       console.error("FAQ init error:", e);
+      const box = document.getElementById("faq-js-error");
+      if (box) {
+        box.textContent = "Ошибка инициализации FAQ: " + e.message;
+        box.classList.remove("d-none");
+      }
     }
 
     // ── Запоминаем активную вкладку настроек; сбрасываем при уходе со страницы ──
@@ -740,7 +756,13 @@ block content %}
       }
     });
     } catch (e) { /* приватный режим/без storage — не критично */ }
-  });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initSettingsPage);
+  } else {
+    initSettingsPage();
+  }
 
   function togglePw(btn) {
     const input = btn.closest(".input-wrap").querySelector("input");

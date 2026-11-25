@@ -114,7 +114,7 @@ def check_live(compose: list[str]) -> int:
 import json, sys, urllib.request
 
 BASE = "http://localhost:5001"
-CASES = {json.dumps(LIVE_CASES, ensure_ascii=False)}
+CASES = {LIVE_CASES!r}
 
 
 def call(payload):

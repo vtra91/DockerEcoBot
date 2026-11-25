@@ -50,6 +50,10 @@ class FAQService:
         self._lock = threading.Lock()
         self._load()
 
+    @property
+    def path(self) -> str:
+        return str(self._path)
+
     @classmethod
     def get(cls) -> "FAQService":
         if cls._instance is None:
@@ -134,8 +138,14 @@ class FAQService:
 
     # ── Поиск ─────────────────────────────────────────────────────────────────
 
-    def find(self, query: str) -> Optional[Dict[str, Any]]:
-        """Возвращает подходящую запись FAQ или None."""
+    def find(self, query: str, strict: bool = False) -> Optional[Dict[str, Any]]:
+        """Возвращает подходящую запись FAQ или None.
+
+        strict=True — режим для проверки до роутера: принимаем только точное
+        совпадение/вхождение или почти полное покрытие слов кандидата, чтобы
+        доменный вопрос («что это за растение?») не перехватывался правилом
+        («Что это за бот?»).
+        """
         self._ensure_fresh()
         q_norm = _normalize(query)
         if not q_norm:
@@ -151,12 +161,28 @@ class FAQService:
                 if not c_norm:
                     continue
 
-                # 1. Точное совпадение или вхождение осмысленного алиаса.
-                if c_norm == q_norm or (len(c_norm) > 5 and c_norm in q_norm):
+                c_tokens = set(_tokens(candidate))
+
+                # 1. Точное совпадение — принимаем всегда.
+                if c_norm == q_norm:
                     return item
 
-                c_tokens = set(_tokens(candidate))
+                # 1a. Вхождение алиаса — только в мягком режиме (роутер уже выбрал smalltalk).
+                if not strict and len(c_norm) > 5 and c_norm in q_norm:
+                    return item
+
                 if not c_tokens or not q_tokens:
+                    continue
+
+                if strict:
+                    # Только осмысленные кандидаты (>=3 слов) и почти полное покрытие:
+                    # иначе короткое «что это» перехватывало бы «что это за растение?».
+                    if len(c_tokens) < 3:
+                        continue
+                    coverage = len(c_tokens & q_tokens) / len(c_tokens)
+                    if coverage >= 0.85 and coverage > best_score:
+                        best_score = coverage
+                        best = item
                     continue
 
                 # 2. Пересечение токенов (устойчиво к «а кто тебя вообще сделал»).
@@ -168,4 +194,6 @@ class FAQService:
                     best_score = score
                     best = item
 
+        if strict:
+            return best if best_score >= 0.85 else None
         return best if best_score >= _MATCH_THRESHOLD else None

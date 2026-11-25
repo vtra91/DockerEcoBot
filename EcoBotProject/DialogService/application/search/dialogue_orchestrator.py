@@ -393,6 +393,19 @@ class DialogueOrchestrator:
             logger.info(f"🚫 Abuse blocked: {query[:60]!r}")
             return _short_circuit(ABUSE_TEXT, t0, slots={"route": "ABUSE", "template": "ABUSE"})
 
+        # Слой 1.5: FAQ — точное/близкое совпадение важнее маршрута:
+        # правило из справочника срабатывает, даже если роутер увёл бы в поиск.
+        if router_on and (faq_hit := await self._executor.match_faq(query)):
+            answer = (faq_hit.get("answer") or "").strip()
+            if answer:
+                logger.info(f"📚 FAQ match: id={faq_hit.get('id')} query={query[:60]!r}")
+                return _short_circuit(
+                    answer,
+                    t0,
+                    slots={"route": "SMALLTALK", "template": "SMALLTALK",
+                           "matched_by": "faq", "source": "faq", "faq": faq_hit},
+                )
+
         # Слой 2: быстрый smalltalk (приветствия, благодарности, эмоции).
         if _is_smalltalk(query):
             details = await self._executor.respond_smalltalk_details(query)

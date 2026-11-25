@@ -657,6 +657,8 @@ async def settings_page(request: Request):
     bot_online = await is_bot_online_redis()
     prompts = {}
     faq_items = None
+    faq_path = ""
+    faq_count = 0
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
@@ -668,7 +670,10 @@ async def settings_page(request: Request):
         try:
             f_resp = await client.get(f"{BACKEND_BASE}/faq")
             if f_resp.status_code == 200:
-                faq_items = f_resp.json().get("items", [])
+                faq_payload = f_resp.json()
+                faq_items = faq_payload.get("items", [])
+                faq_path = faq_payload.get("path", "")
+                faq_count = faq_payload.get("count", len(faq_items or []))
         except Exception as e:
             print(f"Ошибка загрузки FAQ: {e}")
 
@@ -705,6 +710,8 @@ async def settings_page(request: Request):
         "faq_msg": faq_msg,
         "faq_err": faq_err,
         "faq_edit_aliases": faq_edit_aliases,
+        "faq_path": faq_path,
+        "faq_count": faq_count,
         "active_tab": active_tab,
         "faq_json_text": faq_json_text,
         "shared": shared,

@@ -8,6 +8,7 @@ POST принимает {"items": [...]} (или сразу список), ва�
 import logging
 
 from fastapi import APIRouter, Body, HTTPException
+from pydantic import BaseModel, Field
 
 from search_api.services.faq_service import FAQService
 
@@ -15,9 +16,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class FaqQuery(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+
+
 @router.get("/faq")
 async def get_faq():
-    return {"items": FAQService.get().items()}
+    svc = FAQService.get()
+    items = svc.items()
+    return {"items": items, "path": svc.path, "count": len(items)}
+
+
+@router.post("/faq/match")
+async def match_faq(body: FaqQuery):
+    """Детерминированный поиск по справочнику — используется до роутера."""
+    return {"match": FAQService.get().find(body.query, strict=True)}
 
 
 @router.post("/faq")

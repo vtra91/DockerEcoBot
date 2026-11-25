@@ -243,6 +243,11 @@ block content %}
       {% if not faq_items %}
       <div class="text-muted small">Записей пока нет — нажмите «Добавить запись».</div>
       {% endif %}
+      {% if faq_path %}
+      <div class="text-muted small mt-1">
+        Файл: <code>{{ faq_path }}</code> · записей: {{ faq_count }}
+      </div>
+      {% endif %}
       {% endif %}
 
       {% else %} {# ── Обычная вкладка — разбиваем поля на instant и restart ──

@@ -111,6 +111,65 @@ block content %}
         </div>
       </form>
 
+      {% elif tab.id == "faq" %} {# ── Вкладка FAQ — справочник smalltalk-ответов ── #}
+      <div class="section-divider">
+        <span class="section-divider-label instant">Мгновенно</span>
+      </div>
+      {% if faq_items is none %}
+      <div
+        class="alert d-flex align-items-center gap-3 mb-4"
+        style="
+          background: #fff7ed;
+          border: 1px solid #fed7aa;
+          border-radius: 12px;
+          padding: 14px 18px;
+        "
+      >
+        <i
+          class="bi bi-exclamation-triangle-fill"
+          style="color: #ea580c; font-size: 1.3rem"
+        ></i>
+        <div>
+          <strong class="text-danger">Backend недоступен</strong>
+          <div class="text-muted" style="font-size: 0.88rem">
+            FAQ не загружен. Убедитесь, что контейнер
+            <code>backend</code> запущен, затем обновите страницу.
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      <div class="mb-3">
+        <label class="form-label fw-bold text-primary">
+          Записи FAQ (JSON)
+        </label>
+        <div class="field-desc">
+          Поля: <code>id</code>, <code>kind</code> (<code>meta</code> /
+          <code>chitchat</code>), <code>question</code>,
+          <code>aliases</code> (список), <code>answer</code>. Ответ из FAQ
+          отдаётся детерминированно, без участия LLM.
+        </div>
+        <textarea
+          id="faq-json"
+          class="form-control"
+          rows="22"
+          spellcheck="false"
+          style="
+            font-family: &quot;JetBrains Mono&quot;, monospace;
+            font-size: 0.85rem;
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+          "
+        >{{ (faq_items or []) | tojson }}</textarea>
+      </div>
+      <div class="save-bar">
+        <button type="button" class="btn btn-primary px-4 fw-bold" id="btn-save-faq">
+          Сохранить FAQ
+        </button>
+        <span class="save-hint"
+          >Применяется мгновенно — backend перечитывает справочник</span
+        >
+      </div>
+
       {% else %} {# ── Обычная вкладка — разбиваем поля на instant и restart ──
       #} {% set instant_fields = tab.fields | selectattr("reload", "equalto",
       "instant") | list %} {% set restart_fields = tab.fields |
@@ -131,7 +190,7 @@ block content %}
   type="checkbox"
   id="toggle-{{ field.key }}"
   style="width: 2.5em; height: 1.3em"
-  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) %}checked{% endif %}
+  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) or (field.key == 'semantic_router' and semantic_router_enabled) %}checked{% endif %}
 />
                 <label
                   class="form-check-label fw-bold ms-1"
@@ -324,6 +383,65 @@ block content %}
           );
         } catch {
           showToast("Ошибка при сохранении", "danger");
+        }
+      });
+    }
+
+    // Semantic router toggle
+    const routerToggle = document.getElementById("toggle-semantic_router");
+    if (routerToggle) {
+      routerToggle.addEventListener("change", async (e) => {
+        try {
+          await fetch("{{ ADMIN_PREFIX }}/chat/semantic-router-setting", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: e.target.checked }),
+          });
+          showToast(
+            e.target.checked
+              ? "БЯМ-роутер включён"
+              : "БЯМ-роутер выключен — поведение как раньше",
+            "success",
+          );
+        } catch {
+          showToast("Ошибка при сохранении", "danger");
+        }
+      });
+    }
+
+    // FAQ: форматируем JSON при открытии и сохраняем в backend
+    const faqArea = document.getElementById("faq-json");
+    if (faqArea) {
+      try {
+        faqArea.value = JSON.stringify(JSON.parse(faqArea.value), null, 2);
+      } catch (e) {
+        // оставляем как есть — пользователь увидит ошибку при сохранении
+      }
+    }
+
+    const faqSave = document.getElementById("btn-save-faq");
+    if (faqSave) {
+      faqSave.addEventListener("click", async () => {
+        let items;
+        try {
+          items = JSON.parse(document.getElementById("faq-json").value);
+        } catch (e) {
+          showToast("Некорректный JSON: " + e.message, "danger");
+          return;
+        }
+        try {
+          const resp = await fetch("{{ ADMIN_PREFIX }}/settings/faq", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) {
+            throw new Error(data.detail || "ошибка сохранения");
+          }
+          showToast("FAQ сохранён: " + data.count + " записей", "success");
+        } catch (e) {
+          showToast("Ошибка сохранения: " + e.message, "danger");
         }
       });
     }

@@ -152,6 +152,7 @@ app.add_middleware(
 async def _init_redis_settings():
     await settings_redis.set("settings:promo_enabled", "1", nx=True)
     await settings_redis.set("settings:multi_act_dialog", "1", nx=True)
+    await settings_redis.set("settings:semantic_router", "0", nx=True)
 
 
 CORE_API_BASE = os.getenv("CORE_API_BASE", "http://core-api:5001")
@@ -387,6 +388,21 @@ async def set_multi_act_setting(request: Request, data: dict = Body(...)):
     return {"multi_act_enabled": enabled}
 
 
+@app.get("/chat/semantic-router-setting")
+async def get_semantic_router_setting(request: Request):
+    val = await settings_redis.get("settings:semantic_router")
+    return {"semantic_router_enabled": val == "1"}
+
+
+@app.post("/chat/semantic-router-setting")
+async def set_semantic_router_setting(request: Request, data: dict = Body(...)):
+    if not request.session.get("user_id"):
+        raise HTTPException(status_code=401)
+    enabled = bool(data.get("enabled", True))
+    await settings_redis.set("settings:semantic_router", "1" if enabled else "0")
+    return {"semantic_router_enabled": enabled}
+
+
 @app.post("/chat/search")
 async def search_proxy(request: Request, data: dict = Body(...)):
     user_id = request.session.get("user_id")
@@ -398,12 +414,14 @@ async def search_proxy(request: Request, data: dict = Body(...)):
     promo_val = await settings_redis.get("settings:promo_enabled")
     promo_enabled = promo_val != "0"
     multi_act_enabled = (await settings_redis.get("settings:multi_act_dialog")) != "0"
+    router_enabled = (await settings_redis.get("settings:semantic_router")) == "1"
     async with httpx.AsyncClient(timeout=httpx.Timeout(150.0)) as client:
         try:
             response = await client.post(
                 f"{CORE_API_BASE}/search_pipeline",
                 json={"query": query, "user_id": user_id, "promo_enabled": promo_enabled,
-                      "multi_act_enabled": multi_act_enabled}
+                      "multi_act_enabled": multi_act_enabled,
+                      "router_enabled": router_enabled}
             )
             return response.json()
         except Exception as e:
@@ -638,6 +656,7 @@ async def settings_page(request: Request):
 
     bot_online = await is_bot_online_redis()
     prompts = {}
+    faq_items = None
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
@@ -646,21 +665,31 @@ async def settings_page(request: Request):
                 prompts = p_resp.json()
         except Exception as e:
             print(f"Ошибка загрузки промптов: {e}")
+        try:
+            f_resp = await client.get(f"{BACKEND_BASE}/faq")
+            if f_resp.status_code == 200:
+                faq_items = f_resp.json().get("items", [])
+        except Exception as e:
+            print(f"Ошибка загрузки FAQ: {e}")
 
     shared = dict(dotenv_values(SHARED_ENV_PATH)) if SHARED_ENV_PATH.exists() else {}
     promo_val = await settings_redis.get("settings:promo_enabled")
     promo_enabled = promo_val != "0"
     multi_act_val = await settings_redis.get("settings:multi_act_dialog")
     multi_act_enabled = multi_act_val != "0"
+    router_val = await settings_redis.get("settings:semantic_router")
+    semantic_router_enabled = router_val == "1"
 
     return templates.TemplateResponse("settings.html", {
         "request": request,
         "active_page": "settings",
         "bot_online": bot_online,
         "prompts": prompts,
+        "faq_items": faq_items,
         "shared": shared,
         "promo_enabled": promo_enabled,
         "multi_act_enabled": multi_act_enabled,
+        "semantic_router_enabled": semantic_router_enabled,
         "schema": _load_config_schema(),
     })
 
@@ -673,6 +702,21 @@ async def save_prompts(request: Request, data: dict = Body(...)):
         if resp.status_code == 200:
             return resp.json()
         raise HTTPException(status_code=500, detail="Ошибка сохранения промптов")
+
+
+@app.post("/settings/faq")
+async def save_faq(request: Request, data: dict = Body(...)):
+    """Сохраняет справочник FAQ в backend (без перезапуска контейнера)."""
+    if not request.session.get("user_id"):
+        raise HTTPException(status_code=401)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            resp = await client.post(f"{BACKEND_BASE}/faq", json=data)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Backend недоступен: {e}")
+        if resp.status_code == 200:
+            return resp.json()
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения FAQ: {resp.text[:300]}")
 
 
 async def _hot_reload_all() -> dict:

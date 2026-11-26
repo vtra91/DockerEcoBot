@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 
@@ -76,9 +77,18 @@ async def smalltalk(request: SmalltalkRequest):
         return {"answer": emotion, "source": "emotion"}
 
     # 2. Свободная болтовня — генерирует LLM.
+    #    В промпт передаём справочник FAQ: если правило не сработало детерминированно,
+    #    модель может подхватить его по смыслу. Пустой список = правила не применяются.
     try:
+        try:
+            faq_items = FAQService.get().items()
+        except Exception as exc:
+            logger.warning("FAQ items unavailable: %s", exc)
+            faq_items = []
+        faq_json = json.dumps(faq_items, ensure_ascii=False, indent=2) if faq_items else ""
+
         generator = LLMAnswerGenerator(vector_search=None)
-        result = generator.generate_smalltalk(request.query)
+        result = generator.generate_smalltalk(request.query, faq_json=faq_json)
         answer = (result.get("content") or "").strip()
         if answer:
             return {"answer": answer, "source": "llm"}

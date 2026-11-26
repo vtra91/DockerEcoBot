@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Optional
 from config import API_URLS, STAND_SECRET_KEY
 from utils.stand_manager import is_stand_session_active
 from utils.error_logger import log_api_fail, log_zero_results
+from utils.bot_messages import (
+    IMAGE_NOT_FOUND_OBJECTS,
+    IMAGE_NOT_FOUND_SYNONYM,
+    IMAGE_NOT_FOUND_GENERIC,
+)
 
 
 class _ApiError(Exception):
@@ -322,6 +327,30 @@ class SlotSearchExecutor:
                 for obj in promo_objects
             ]
 
+        # Модальность «Изображение», но фотографий не нашлось: не подменяем ответ
+        # текстом из RAG-фолбэка, а явно сообщаем, что фото нет.
+        if slots.get("modality") == "Изображение" and not result.get("images"):
+            result.pop("answer", None)
+            result.pop("map", None)
+            result["no_images"] = True
+            names = [
+                o.get("name")
+                for o in (result.get("objects") or [])
+                if o.get("name") and o.get("name") != "—"
+            ]
+            if names:
+                shown = ", ".join(names[:3])
+                if len(names) > 3:
+                    shown += " и др."
+                result["answer"] = IMAGE_NOT_FOUND_OBJECTS.format(names=shown)
+            else:
+                synonym = (slots.get("synonym") or "").strip()
+                result["answer"] = (
+                    IMAGE_NOT_FOUND_SYNONYM.format(synonym=synonym)
+                    if synonym
+                    else IMAGE_NOT_FOUND_GENERIC
+                )
+
         result["more"] = self._build_more(
             search_data=search_data,
             result=result,
@@ -345,6 +374,11 @@ class SlotSearchExecutor:
         object_offset: int,
         resource_offset: int,
     ) -> dict | None:
+        # Для запроса фото без картинок пагинация не нужна: «Покажи ещё»
+        # подразумевало бы ещё фотографии, которых нет.
+        if result.get("no_images"):
+            return None
+
         res_page = search_data.get("resources_pagination") or {}
         obj_page = search_data.get("pagination") or {}
         total_resources = int(search_data.get("total_resources") or res_page.get("total") or 0)

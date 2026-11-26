@@ -5,6 +5,8 @@ from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from maxapi.types.attachments.buttons import LinkButton, CallbackButton
 from maxapi.types import InputMediaBuffer
 
+from utils.bot_messages import IMAGE_LOAD_FAILED
+
 logger = logging.getLogger(__name__)
 
 _MAX_IMAGES = 3
@@ -42,6 +44,7 @@ async def render_pipeline_result(
     # --------------Блок прерывания отправки текстовых сообщений когда есть фото---------------
     # Если в ответе есть изображение, присылаем только их
     if images:
+        sent = 0
         for url in images[:_MAX_IMAGES]:
             data = await _fetch_image(session, url)
             if data:
@@ -50,8 +53,15 @@ async def render_pipeline_result(
                         chat_id=chat_id,
                         attachments=[InputMediaBuffer(buffer=data, filename="photo.jpg")],
                     )
+                    sent += 1
                 except Exception as e:
                     logger.error(f"Image send failed: {e}")
+
+        if not sent:
+            # Ни одна картинка не скачалась — иначе пользователь не получит вообще ничего.
+            logger.warning("All image downloads failed — sending text fallback")
+            await bot.send_message(chat_id=chat_id, text=IMAGE_LOAD_FAILED)
+            return
 
         if more.get("has_more") or (result.get("is_more_page") and more.get("note")):
             more_builder = InlineKeyboardBuilder()

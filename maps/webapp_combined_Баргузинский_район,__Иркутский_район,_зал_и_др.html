@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_ee41d6a9c163b785bc1d7d2d1bbb4a6e {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_ee41d6a9c163b785bc1d7d2d1bbb4a6e" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_ee41d6a9c163b785bc1d7d2d1bbb4a6e = L.map(
+                "map_ee41d6a9c163b785bc1d7d2d1bbb4a6e",
+                {
+                    center: [52.906544, 107.9044775],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 9,
+  "zoomControl": true,
+  "preferCanvas": false,
+  "attributionControl": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_054d7afb1ea8de02e6b6d93a5f579046 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_054d7afb1ea8de02e6b6d93a5f579046.addTo(map_ee41d6a9c163b785bc1d7d2d1bbb4a6e);
+        
+    
+        function geo_json_202547d194432522f1061890e592b5b2_styler(feature) {
+            switch(feature.id) {
+                default:
+                    return {"color": "#0d47a1", "fillColor": "#1a73e8", "fillOpacity": 0.3, "weight": 2};
+            }
+        }
+
+        function geo_json_202547d194432522f1061890e592b5b2_onEachFeature(feature, layer) {
+
+            layer.on({
+            });
+        };
+        var geo_json_202547d194432522f1061890e592b5b2 = L.geoJson(null, {
+                onEachFeature: geo_json_202547d194432522f1061890e592b5b2_onEachFeature,
+            
+                style: geo_json_202547d194432522f1061890e592b5b2_styler,
+            ...{
+}
+        });
+
+        function geo_json_202547d194432522f1061890e592b5b2_add (data) {
+            geo_json_202547d194432522f1061890e592b5b2
+                .addData(data);
+        }
+            geo_json_202547d194432522f1061890e592b5b2_add({"features": [{"geometry": {"coordinates": [109.5559, 53.66374], "type": "Point"}, "id": "0", "type": "Feature"}], "type": "FeatureCollection"});
+
+        
+    
+            geo_json_202547d194432522f1061890e592b5b2.bindTooltip(
+                `<div>
+                     Баргузинский район, бухта Аяя
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+        var popup_79bd22c434a7b675af6e061b4212bb76 = L.popup({
+  "maxWidth": 400,
+});
+
+        
+            
+                var html_0e837db5b26c859ca08b5ecd9688bbd9 = $(`<div id="html_0e837db5b26c859ca08b5ecd9688bbd9" style="width: 100.0%; height: 100.0%;">Баргузинский район, бухта Аяя</div>`)[0];
+                popup_79bd22c434a7b675af6e061b4212bb76.setContent(html_0e837db5b26c859ca08b5ecd9688bbd9);
+            
+        
+
+        geo_json_202547d194432522f1061890e592b5b2.bindPopup(popup_79bd22c434a7b675af6e061b4212bb76)
+        ;
+
+        
+    
+    
+            geo_json_202547d194432522f1061890e592b5b2.addTo(map_ee41d6a9c163b785bc1d7d2d1bbb4a6e);
+        
+    
+        function geo_json_fe95cc92b4eb247e776005fc1b4832c8_styler(feature) {
+            switch(feature.id) {
+                default:
+                    return {"color": "#0d47a1", "fillColor": "#1a73e8", "fillOpacity": 0.3, "weight": 2};
+            }
+        }
+
+        function geo_json_fe95cc92b4eb247e776005fc1b4832c8_onEachFeature(feature, layer) {
+
+            layer.on({
+            });
+        };
+        var geo_json_fe95cc92b4eb247e776005fc1b4832c8 = L.geoJson(null, {
+                onEachFeature: geo_json_fe95cc92b4eb247e776005fc1b4832c8_onEachFeature,
+            
+                style: geo_json_fe95cc92b4eb247e776005fc1b4832c8_styler,
+            ...{
+}
+        });
+
+        function geo_json_fe95cc92b4eb247e776005fc1b4832c8_add (data) {
+            geo_json_fe95cc92b4eb247e776005fc1b4832c8
+                .addData(data);
+        }
+            geo_json_fe95cc92b4eb247e776005fc1b4832c8_add({"features": [{"geometry": {"coordinates": [106.253055, 52.149348], "type": "Point"}, "id": "0", "type": "Feature"}], "type": "FeatureCollection"});
+
+        
+    
+            geo_json_fe95cc92b4eb247e776005fc1b4832c8.bindTooltip(
+                `<div>
+                     Иркутский район, залив Сор-Черкалово
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+        var popup_678efeb5ca3774e5e675a68e348f82b1 = L.popup({
+  "maxWidth": 400,
+});
+
+        
+            
+                var html_aecac900cf046e6314c57c29034555f8 = $(`<div id="html_aecac900cf046e6314c57c29034555f8" style="width: 100.0%; height: 100.0%;">Иркутский район, залив Сор-Черкалово</div>`)[0];
+                popup_678efeb5ca3774e5e675a68e348f82b1.setContent(html_aecac900cf046e6314c57c29034555f8);
+            
+        
+
+        geo_json_fe95cc92b4eb247e776005fc1b4832c8.bindPopup(popup_678efeb5ca3774e5e675a68e348f82b1)
+        ;
+
+        
+    
+    
+            geo_json_fe95cc92b4eb247e776005fc1b4832c8.addTo(map_ee41d6a9c163b785bc1d7d2d1bbb4a6e);
+        
+</script>
+</html>

@@ -149,18 +149,29 @@ class SQLAlchemySearchRepository(SearchRepository):
             ], total
                           
     def _canonical_synonym(self, session, object_id: int) -> str | None:
-        """Основное название объекта — синоним с наивысшим приоритетом."""
-        row = (
-            session.query(ObjectNameSynonym.synonym)
-            .join(object_synonym_link, object_synonym_link.c.synonym_id == ObjectNameSynonym.id)
-            .filter(object_synonym_link.c.object_id == object_id)
-            .order_by(
-                object_synonym_link.c.priority.asc().nullslast(),
-                ObjectNameSynonym.synonym.asc(),
+        """Основное название объекта — русский синоним с наивысшим приоритетом.
+
+        Латинские/английские синонимы (ASCII) при сортировке идут раньше кириллицы,
+        поэтому сначала ищем по language='ru' и только при отсутствии русского
+        берём любой другой.
+        """
+        def _fetch(language: str | None) -> str | None:
+            query = (
+                session.query(ObjectNameSynonym.synonym)
+                .join(object_synonym_link, object_synonym_link.c.synonym_id == ObjectNameSynonym.id)
+                .filter(object_synonym_link.c.object_id == object_id)
             )
-            .first()
-        )
-        return row[0] if row else None
+            if language is not None:
+                query = query.filter(ObjectNameSynonym.language == language)
+            row = (
+                query.order_by(
+                    object_synonym_link.c.priority.asc().nullslast(),
+                    ObjectNameSynonym.synonym.asc(),
+                ).first()
+            )
+            return row[0] if row else None
+
+        return _fetch("ru") or _fetch(None)
 
     def find_similar_objects_with_images(
         self,

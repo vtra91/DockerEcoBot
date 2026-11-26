@@ -401,11 +401,8 @@ class SlotSearchExecutor:
                 for o in (result.get("objects") or [])
                 if o.get("name") and o.get("name") != "—"
             ]
-            if names:
-                shown = ", ".join(f"«{name}»" for name in names[:3])
-                if len(names) > 3:
-                    shown += " и др."
-                result["answer"] = IMAGE_NOT_FOUND_OBJECTS.replace("{names}", shown)
+	    if names:
+                result["answer"] = IMAGE_NOT_FOUND_OBJECTS.replace("{names}", f"«{names[0]}»")
             else:
                 synonym = (slots.get("synonym") or "").strip()
                 result["answer"] = (

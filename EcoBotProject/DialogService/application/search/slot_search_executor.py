@@ -204,16 +204,22 @@ class SlotSearchExecutor:
         if not items:
             return
 
-        suggestions = [
-            {"name": item.get("name"), "db_id": item.get("db_id")}
-            for item in items
-            if item.get("name")
-        ]
+        seen: set[str] = set()
+        suggestions: List[Dict[str, Any]] = []
+        for item in items:
+            name = (item.get("name") or "").strip()
+            key = name.lower().replace("ё", "е")
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            suggestions.append({"name": name, "db_id": item.get("db_id")})
+            if len(suggestions) >= 3:
+                break
         if not suggestions:
             return
 
         result["suggestions"] = suggestions
-        names = ", ".join(s["name"] for s in suggestions)
+        names = ", ".join(f"«{s['name']}»" for s in suggestions)
         base = (result.get("answer") or "").strip()
         hint = IMAGE_SUGGESTIONS.replace("{names}", names)
         result["answer"] = f"{base} {hint}".strip()
@@ -396,7 +402,7 @@ class SlotSearchExecutor:
                 if o.get("name") and o.get("name") != "—"
             ]
             if names:
-                shown = ", ".join(names[:3])
+                shown = ", ".join(f"«{name}»" for name in names[:3])
                 if len(names) > 3:
                     shown += " и др."
                 result["answer"] = IMAGE_NOT_FOUND_OBJECTS.replace("{names}", shown)

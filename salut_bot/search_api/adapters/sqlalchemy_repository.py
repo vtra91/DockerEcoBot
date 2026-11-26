@@ -1,5 +1,6 @@
 import difflib
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 import json
@@ -8,11 +9,34 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy import func, cast, text, String, Boolean, Float, or_
 from ..domain.entities import ObjectResult, ResourceResult, ObjectCriteria, ResourceCriteria
 from .search_repository import SearchRepository
-from ..infrastructure.orm.object_models import Object, ObjectNameSynonym, ObjectType
+from ..infrastructure.orm.object_models import Object, ObjectNameSynonym, ObjectType, object_synonym_link
 from ..infrastructure.orm.resource_models import Resource, Bibliographic, Author, Source, ResourceStatic
 from ..infrastructure.orm.modality_models import Modality, TextValue, ImageValue, GeodataValue, ResourceValue
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_name(value: str) -> str:
+    return (value or "").strip().lower().replace("ё", "е")
+
+
+def _is_relevant(query: str, candidate: str, score: float) -> bool:
+    """Отсекает случайные триграммные совпадения вроде «бабочка» → «бабка»."""
+    q, c = _normalize_name(query), _normalize_name(candidate)
+    if len(q) < 3 or not c:
+        return False
+    if q in c:
+        return True
+    if c in q and len(c) >= 4:
+        return True
+    if len(os.path.commonprefix([q, c])) >= 4:
+        return True
+    q_words = set(q.split())
+    for word in c.split():
+        if len(word) >= 4 and (word.startswith(q) or q.startswith(word) or word in q_words):
+            return True
+    return score >= 0.45
+
 
 class SQLAlchemySearchRepository(SearchRepository):
     def __init__(self, session_factory):
@@ -124,20 +148,34 @@ class SQLAlchemySearchRepository(SearchRepository):
                 ) for obj in objects
             ], total
                           
+    def _canonical_synonym(self, session, object_id: int) -> str | None:
+        """Основное название объекта — синоним с наивысшим приоритетом."""
+        row = (
+            session.query(ObjectNameSynonym.synonym)
+            .join(object_synonym_link, object_synonym_link.c.synonym_id == ObjectNameSynonym.id)
+            .filter(object_synonym_link.c.object_id == object_id)
+            .order_by(
+                object_synonym_link.c.priority.asc().nullslast(),
+                ObjectNameSynonym.synonym.asc(),
+            )
+            .first()
+        )
+        return row[0] if row else None
+
     def find_similar_objects_with_images(
         self,
         query: str,
         object_type: Optional[str] = None,
         exclude_db_id: Optional[str] = None,
         limit: int = 3,
-        min_score: float = 0.2,
     ) -> List[Dict[str, Any]]:
         """Похожие по названию объекты, у которых точно есть изображения.
 
-        Использует pg_trgm similarity по синонимам (плюс ILIKE для вхождений),
-        фильтрует объекты без ресурсов модальности «Изображение».
+        Кандидаты отбираются pg_trgm, затем строго фильтруются по префиксу/слову,
+        чтобы не предлагать семантически чужие объекты. Имя для показа — каноническое
+        (синоним с наивысшим приоритетом), дубли по имени схлопываются.
         """
-        q = (query or "").strip().lower().replace("ё", "е")
+        q = _normalize_name(query)
         if not q:
             return []
 
@@ -149,7 +187,7 @@ class SQLAlchemySearchRepository(SearchRepository):
             qy = (
                 session.query(Object, func.max(score).label("score"))
                 .join(Object.synonyms)
-                .filter(or_(score >= min_score, syn.like(f"%{q}%")))
+                .filter(or_(score >= 0.15, syn.like(f"%{q}%")))
                 .filter(
                     Object.resources.any(
                         Resource.resource_values.any(
@@ -166,26 +204,39 @@ class SQLAlchemySearchRepository(SearchRepository):
             rows = (
                 qy.group_by(Object.id)
                 .order_by(func.max(score).desc())
-                .limit(max(1, min(limit, 10)))
+                .limit(max(20, limit * 10))
                 .all()
             )
 
-            result: List[Dict[str, Any]] = []
+            best_by_name: Dict[str, Dict[str, Any]] = {}
             for obj, match_score in rows:
-                synonyms = [s.synonym for s in obj.synonyms if s.synonym]
-                if synonyms:
-                    name = max(
-                        synonyms,
-                        key=lambda value: difflib.SequenceMatcher(None, q, value.lower()).ratio(),
-                    )
-                else:
-                    name = obj.db_id
-                result.append({
-                    "db_id": obj.db_id,
-                    "name": name,
-                    "score": float(match_score or 0),
-                })
-            return result
+                synonyms = [item.synonym for item in obj.synonyms if item.synonym]
+                if not synonyms:
+                    continue
+
+                matched = max(
+                    synonyms,
+                    key=lambda value: difflib.SequenceMatcher(None, q, _normalize_name(value)).ratio(),
+                )
+                sc = float(match_score or 0)
+                if not _is_relevant(q, matched, sc):
+                    continue
+
+                canonical = self._canonical_synonym(session, obj.id) or matched
+                canonical = canonical[:1].upper() + canonical[1:]
+                key = _normalize_name(canonical)
+
+                current = best_by_name.get(key)
+                if current is None or sc > current["score"]:
+                    best_by_name[key] = {
+                        "db_id": obj.db_id,
+                        "name": canonical,
+                        "score": sc,
+                        "matched_synonym": matched,
+                    }
+
+            ranked = sorted(best_by_name.values(), key=lambda item: item["score"], reverse=True)
+            return ranked[:max(1, min(limit, 10))]
 
     def find_resources_by_criteria(self, criteria: ResourceCriteria, object_ids: Optional[List[int]] = None, limit: int = 50, offset: int = 0) -> Tuple[List[ResourceResult], int]:
         session = self._session_factory()

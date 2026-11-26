@@ -6,6 +6,7 @@ object_synonym_link = Table(
     'object_name_synonym_link', Base.metadata,
     Column('object_id', Integer, ForeignKey('eco_assistant.object.id'), primary_key=True),
     Column('synonym_id', Integer, ForeignKey('eco_assistant.object_name_synonym.id'), primary_key=True),
+    Column('priority', Integer),
     schema='eco_assistant'
 )
 

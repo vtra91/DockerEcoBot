@@ -71,7 +71,8 @@ block content %}
       properties, features, extra.', 'router_prompt.txt': 'Промпт БЯМ-роутера:
       распределяет сообщение между поиском, small-talk и бранью.', 'answer_prompt.txt':
       'Системный промпт генератора финального ответа по базе знаний.', 'smalltalk_prompt.txt':
-      'Промпт ответов на small-talk: болтовня, эмоции, вопросы о боте.' } %}
+      'Промпт ответов на small-talk. Блок {faq} подставляет правила FAQ;'
+      ' если блок пуст — правила не применяются, модель отвечает как обычно.' } %}
       <form id="form-prompts">
         {% for filename, content in prompts.items() %}
         <div class="mb-4">

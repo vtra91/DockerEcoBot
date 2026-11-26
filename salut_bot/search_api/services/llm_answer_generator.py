@@ -32,10 +32,13 @@ class LLMAnswerGenerator:
             self._llm = get_llm()
         return self._llm
 
-    def generate_smalltalk(self, question: str) -> Dict[str, Any]:
-        """Генерация ответа на смолток: без контекста, без БД, без векторного поиска."""
+    def generate_smalltalk(self, question: str, faq_json: str = "") -> Dict[str, Any]:
+        """Генерация ответа на смолток. faq_json подставляется в блок {faq} промпта;
+        если он пуст, промпт инструктирует модель не применять правила FAQ."""
         llm = self._get_llm()
-        prompt_text = self._smalltalk_prompt().replace("{question}", question)
+        prompt_text = (self._smalltalk_prompt()
+                       .replace("{question}", question)
+                       .replace("{faq}", faq_json or ""))
         try:
             response = llm.invoke(prompt_text)
             content = response.content.strip() if hasattr(response, "content") else str(response)

@@ -54,6 +54,7 @@ services:
       - ./logs:/app/logs
       - ./shared.env:/app/shared.env:ro
       - ./salut_bot/search_api/services/geo_map_service.py:/app/search_api/services/geo_map_service.py:ro
+      - ./EcoBotProject/DialogService/prompts:/app/prompts:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DB_HOST=db
@@ -109,6 +110,7 @@ services:
       - ./shared.env
     volumes:
       - ./shared.env:/app/shared.env:ro
+      - ./EcoBotProject/DialogService/prompts:/app/prompts
     command: python api.py
     environment:
       - PYTHONUNBUFFERED=1
@@ -138,6 +140,7 @@ services:
       - ./data:/app/data
       - ./shared.env:/app/shared.env:ro
       - ./EcoBotProject/DialogService/adapters/max/presenter.py:/app/adapters/max/presenter.py:ro
+      - ./EcoBotProject/DialogService/prompts:/app/prompts:ro
     command: python main_max.py
     expose:
       - "8080"

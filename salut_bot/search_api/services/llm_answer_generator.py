@@ -1,4 +1,6 @@
 import logging
+import os
+from pathlib import Path
 from typing import List, Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
 from ..domain.entities import ObjectResult, ResourceResult
@@ -6,6 +8,19 @@ from ..domain.ports import VectorSearchPort
 from .llm_integration import get_llm
 
 logger = logging.getLogger(__name__)
+
+_PROMPTS_DIR = Path(os.getenv("PROMPTS_DIR", "/app/prompts"))
+
+
+def _read_prompt(name: str) -> str | None:
+    """Читает промпт из общего каталога, чтобы его можно было править на горячую."""
+    try:
+        path = _PROMPTS_DIR / name
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Не удалось прочитать промпт %s: %s", name, exc)
+    return None
 
 class LLMAnswerGenerator:
     def __init__(self, vector_search: VectorSearchPort = None):
@@ -20,7 +35,7 @@ class LLMAnswerGenerator:
     def generate_smalltalk(self, question: str) -> Dict[str, Any]:
         """Генерация ответа на смолток: без контекста, без БД, без векторного поиска."""
         llm = self._get_llm()
-        prompt_text = self._smalltalk_prompt().format(question=question)
+        prompt_text = self._smalltalk_prompt().replace("{question}", question)
         try:
             response = llm.invoke(prompt_text)
             content = response.content.strip() if hasattr(response, "content") else str(response)
@@ -30,6 +45,9 @@ class LLMAnswerGenerator:
             return {"content": "", "finish_reason": "error", "success": False}
 
     def _smalltalk_prompt(self) -> str:
+        text = _read_prompt("smalltalk_prompt.txt")
+        if text:
+            return text
         return (
             "Ты — Экоассистент Байкальского музея СО РАН, эксперт по Байкальской природной территории. "
             "Пользователь отправил короткую реплику, не являющуюся запросом об объекте, месте или услуге. "
@@ -71,7 +89,9 @@ class LLMAnswerGenerator:
         prompt = ChatPromptTemplate.from_messages([
             ("system", self._system_prompt()),
         ])
-        full_prompt = self._system_prompt().format(question=question, context=context)
+        full_prompt = (self._system_prompt()
+                           .replace("{question}", question)
+                           .replace("{context}", context))
         logger.info(f"COMPLETE PROMPT:\n{full_prompt}")
         try:
             chain = prompt | llm
@@ -96,6 +116,9 @@ class LLMAnswerGenerator:
             }
 
     def _system_prompt(self) -> str:
+        text = _read_prompt("answer_prompt.txt")
+        if text:
+            return text
         return (
             "Ты эксперт по Байкальской природной территории. "
             "Используй базу знаний для точных ответов.\n\n"
@@ -103,8 +126,7 @@ class LLMAnswerGenerator:
             "- Если вопрос содержит слово 'сколько' подсчитай количество объектов или ресурсов выданных из базы и расскажи вкратце о нескольких\n"
             "- Начинай ответ с прямого ответа на запрос\n"
             "- Даже при неполной информации предоставь доступные детали\n"
-            "- Будь информативным и дружелюбным"
-            "- Даже при неполной информации предоставь доступные детали"
+            "- Будь информативным и дружелюбным\n"
             "- Не давай ссылки на localhost и карты в целом\n\n"
             "База знаний:\n{context}\n\n"
             "Вопрос: {question}\n\nОтвет:"

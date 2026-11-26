@@ -68,7 +68,10 @@ block content %}
       'examples_for_prompt.txt': 'Few-Shot примеры: «Запрос → Идеальный JSON»,
       обучающие LLM думать правильно.', 'classification_prompt.txt': 'Главный
       промпт классификатора: извлечение слотов object_type, synonym, modality,
-      properties, features, extra.' } %}
+      properties, features, extra.', 'router_prompt.txt': 'Промпт БЯМ-роутера:
+      распределяет сообщение между поиском, small-talk и бранью.', 'answer_prompt.txt':
+      'Системный промпт генератора финального ответа по базе знаний.', 'smalltalk_prompt.txt':
+      'Промпт ответов на small-talk: болтовня, эмоции, вопросы о боте.' } %}
       <form id="form-prompts">
         {% for filename, content in prompts.items() %}
         <div class="mb-4">

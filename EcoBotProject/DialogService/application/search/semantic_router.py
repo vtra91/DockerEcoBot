@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic import BaseModel
@@ -41,8 +42,21 @@ ROUTER_PROMPT = """Ты — маршрутизатор сообщений эко
 {context}
 СООБЩЕНИЕ: {query}
 
-Ответь строго JSON: {{"mode": "SEARCH"}} или {{"mode": "SMALLTALK"}} или {{"mode": "ABUSE"}}
+Ответь строго JSON: {"mode": "SEARCH"} или {"mode": "SMALLTALK"} или {"mode": "ABUSE"}
 """
+
+
+_PROMPT_FILE = Path(__file__).parent.parent.parent / "prompts" / "router_prompt.txt"
+
+
+def _get_router_prompt() -> str:
+    """Промпт роутера читается из файла, чтобы его можно было менять на горячую."""
+    try:
+        if _PROMPT_FILE.exists():
+            return _PROMPT_FILE.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Не удалось прочитать router_prompt.txt: %s", exc)
+    return ROUTER_PROMPT
 
 
 class RouteResult(BaseModel):
@@ -72,7 +86,9 @@ class SemanticRouter:
                 "«а ещё», «покажи ещё») — это SEARCH.\n"
             )
 
-        prompt = ROUTER_PROMPT.format(context=context, query=query)
+        prompt = (_get_router_prompt()
+                  .replace("{context}", context)
+                  .replace("{query}", query))
         try:
             result: RouteResult = await self.parser.ainvoke(prompt)
             mode = result.mode

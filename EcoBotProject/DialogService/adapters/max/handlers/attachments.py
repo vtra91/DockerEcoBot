@@ -220,12 +220,15 @@ async def _handle_voice_message(bot: Bot, chat_id: int, attachment) -> None:
         promo_enabled = promo_val != "0"
         router_val = await ctx.redis_client.get("settings:semantic_router")
         router_enabled = router_val == "1"
+        similar_val = await ctx.redis_client.get("settings:similar_objects")
+        similar_objects_enabled = similar_val != "0"
 
         result = await ctx.orchestrator.process(
             transcribed_text,
             user_id=str(chat_id),
             promo_enabled=promo_enabled,
             router_enabled=router_enabled,
+            similar_objects_enabled=similar_objects_enabled,
         )
         await render_pipeline_result(bot, chat_id, result, ctx.session)
 

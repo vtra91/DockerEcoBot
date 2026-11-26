@@ -102,11 +102,13 @@ def register_callback_handlers(dp: Dispatcher, bot: Bot) -> None:
             promo_val = await ctx.redis_client.get("settings:promo_enabled")
             multi_act_val = await ctx.redis_client.get("settings:multi_act_dialog")
             router_val = await ctx.redis_client.get("settings:semantic_router")
+            similar_val = await ctx.redis_client.get("settings:similar_objects")
             result = await ctx.orchestrator.process(
                 query, user_id=user_id,
                 promo_enabled=promo_val != "0",
                 multi_act_enabled=multi_act_val != "0",
                 router_enabled=router_val == "1",
+                similar_objects_enabled=similar_val != "0",
             )
             await render_pipeline_result(bot, chat_id, result, ctx.session)
         except Exception as e:

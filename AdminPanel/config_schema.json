@@ -83,6 +83,15 @@
           "reload": "instant"
         },
         {
+          "key": "similar_objects",
+          "label": "Похожие объекты",
+          "desc": "Если фото не нашлось, подсказывать похожие объекты с фотографиями",
+          "type": "toggle",
+          "source": "redis",
+          "redis_key": "settings:similar_objects",
+          "reload": "instant"
+        },
+        {
           "key": "MAX_BOT_TOKEN",
           "label": "Токен MAX бота",
           "desc": "Токен бота платформы MAX — получается в личном кабинете MAX",

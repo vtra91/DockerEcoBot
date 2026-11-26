@@ -128,6 +128,14 @@ async def render_pipeline_result(
         builder.row(CallbackButton(text="📖 Подробнее", payload=f"text:{proactive['text'][:50]}"))
         has_buttons = True
 
+    # ── Подсказки: похожие объекты, у которых есть фото ───────────────────────
+    for suggestion in (result.get("suggestions") or [])[:3]:
+        name = (suggestion or {}).get("name")
+        if not name:
+            continue
+        builder.row(CallbackButton(text=f"🖼 {name[:40]}", payload=f"photo:{name[:100]}"))
+        has_buttons = True
+
     # ── Неопределённая модальность (Сценарий 2) ───────────────────────────────
     if modality_ambiguous and slots.get("synonym") and not proactive.get("map") and not map_data:
         builder.row(CallbackButton(

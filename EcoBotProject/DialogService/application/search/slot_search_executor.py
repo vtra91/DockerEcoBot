@@ -11,6 +11,7 @@ from utils.bot_messages import (
     IMAGE_NOT_FOUND_OBJECTS,
     IMAGE_NOT_FOUND_SYNONYM,
     IMAGE_NOT_FOUND_GENERIC,
+    IMAGE_SUGGESTIONS,
 )
 
 
@@ -82,6 +83,7 @@ class SlotSearchExecutor:
         resource_limit: int | None = None,
         use_llm_answer: bool | None = None,
         include_resources: bool = True,
+        similar_objects: bool = True,
     ) -> Dict[str, Any]:
         try:
             if self._use_place_endpoint(slots):
@@ -124,6 +126,9 @@ class SlotSearchExecutor:
             object_offset=object_offset,
             resource_offset=resource_offset,
         )
+
+        if result.get("no_images") and similar_objects:
+            await self._attach_similar_objects(result, slots)
 
         if user_id and self._session and self._is_zero_result(slots, result, search_data):
             await log_zero_results(
@@ -181,6 +186,58 @@ class SlotSearchExecutor:
         except Exception as e:
             logger.error(f"Smalltalk call failed: {e}")
             return {}
+        finally:
+            if own_session:
+                await sess.close()
+
+    async def _attach_similar_objects(self, result: dict, slots: Dict[str, Any]) -> None:
+        """Добавляет к ответу похожие объекты, у которых точно есть фото."""
+        synonym = (slots.get("synonym") or "").strip()
+        if not synonym:
+            return
+
+        objects = result.get("objects") or []
+        exclude_db_id = objects[0].get("db_id") if objects else None
+        items = await self._fetch_similar_objects(
+            synonym, slots.get("object_type"), exclude_db_id
+        )
+        if not items:
+            return
+
+        suggestions = [
+            {"name": item.get("name"), "db_id": item.get("db_id")}
+            for item in items
+            if item.get("name")
+        ]
+        if not suggestions:
+            return
+
+        result["suggestions"] = suggestions
+        names = ", ".join(s["name"] for s in suggestions)
+        base = (result.get("answer") or "").strip()
+        hint = IMAGE_SUGGESTIONS.replace("{names}", names)
+        result["answer"] = f"{base} {hint}".strip()
+
+    async def _fetch_similar_objects(
+        self, synonym: str, object_type: str | None = None, exclude_db_id: str | None = None
+    ) -> List[dict]:
+        own_session = self._session is None
+        sess = self._session or aiohttp.ClientSession()
+        payload: Dict[str, Any] = {"query": synonym, "limit": 3}
+        if object_type:
+            payload["object_type"] = object_type
+        if exclude_db_id:
+            payload["exclude_db_id"] = exclude_db_id
+        try:
+            async with sess.post(f"{self._backend_url}/objects/similar", json=payload, timeout=10) as resp:
+                if resp.status != 200:
+                    logger.warning(f"similar objects HTTP {resp.status}")
+                    return []
+                data = await resp.json(content_type=None)
+                return data.get("objects") or []
+        except Exception as e:
+            logger.warning(f"similar objects failed: {e}")
+            return []
         finally:
             if own_session:
                 await sess.close()
@@ -342,11 +399,11 @@ class SlotSearchExecutor:
                 shown = ", ".join(names[:3])
                 if len(names) > 3:
                     shown += " и др."
-                result["answer"] = IMAGE_NOT_FOUND_OBJECTS.format(names=shown)
+                result["answer"] = IMAGE_NOT_FOUND_OBJECTS.replace("{names}", shown)
             else:
                 synonym = (slots.get("synonym") or "").strip()
                 result["answer"] = (
-                    IMAGE_NOT_FOUND_SYNONYM.format(synonym=synonym)
+                    IMAGE_NOT_FOUND_SYNONYM.replace("{synonym}", synonym)
                     if synonym
                     else IMAGE_NOT_FOUND_GENERIC
                 )

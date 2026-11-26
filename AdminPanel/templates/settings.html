@@ -274,7 +274,7 @@ block content %}
   type="checkbox"
   id="toggle-{{ field.key }}"
   style="width: 2.5em; height: 1.3em"
-  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) or (field.key == 'semantic_router' and semantic_router_enabled) %}checked{% endif %}
+  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) or (field.key == 'semantic_router' and semantic_router_enabled) or (field.key == 'similar_objects' and similar_objects_enabled) %}checked{% endif %}
 />
                 <label
                   class="form-check-label fw-bold ms-1"
@@ -487,6 +487,28 @@ block content %}
             e.target.checked
               ? "БЯМ-роутер включён"
               : "БЯМ-роутер выключен — поведение как раньше",
+            "success",
+          );
+        } catch {
+          showToast("Ошибка при сохранении", "danger");
+        }
+      });
+    }
+
+    // Similar objects toggle
+    const similarToggle = document.getElementById("toggle-similar_objects");
+    if (similarToggle) {
+      similarToggle.addEventListener("change", async (e) => {
+        try {
+          await fetch("{{ ADMIN_PREFIX }}/chat/similar-objects-setting", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: e.target.checked }),
+          });
+          showToast(
+            e.target.checked
+              ? "Подсказки похожих объектов включены"
+              : "Подсказки похожих объектов выключены",
             "success",
           );
         } catch {

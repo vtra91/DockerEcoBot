@@ -348,6 +348,14 @@ def _router_enabled(flag: bool | None) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _similar_objects_enabled(flag: bool | None) -> bool:
+    """True включает подсказки похожих объектов с фото."""
+    if flag is not None:
+        return bool(flag)
+    raw = os.getenv("SIMILAR_OBJECTS_ENABLED", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _short_circuit(answer: str, t0: float, slots: dict | None = None) -> dict:
     """Ответ без поиска — тот же контракт, что у smalltalk-заглушки.
 
@@ -383,10 +391,12 @@ class DialogueOrchestrator:
 
     async def process(self, query: str, user_id: str | None = None, promo_enabled: bool | None = None,
                       multi_act_enabled: bool | None = None,
-                      router_enabled: bool | None = None) -> dict:
+                      router_enabled: bool | None = None,
+                      similar_objects_enabled: bool | None = None) -> dict:
         """Полный цикл: классификация → мердж контекста → поиск → проактивность."""
         t0 = time.monotonic()
         router_on = _router_enabled(router_enabled)
+        similar_objects = _similar_objects_enabled(similar_objects_enabled)
 
         # Слой 1: нецензурная лексика — детерминированно, без БЯМ и без поиска.
         if router_on and is_abusive(query):
@@ -487,7 +497,8 @@ class DialogueOrchestrator:
         result = await self._execute_and_finalize(query, slots, user_id, is_continuation,
                                                   promo_enabled=promo_enabled,
                                                   prev_query=prev.query if prev else None,
-                                                  multi_act=multi_act)
+                                                  multi_act=multi_act,
+                                                  similar_objects=similar_objects)
         exec_timing = result.get("timing", {})
         result["timing"] = {
             "classify_ms": classify_ms,
@@ -516,10 +527,14 @@ class DialogueOrchestrator:
         promo_enabled: bool | None = None,
         prev_query: str | None = None,
         multi_act: bool = True,
+        similar_objects: bool = True,
     ) -> dict:
         t_search = time.monotonic()
         log_context = {"current_query": query, "prev_query": prev_query}
-        pipeline_result = await self._executor.execute(query, slots, user_id=user_id, promo_enabled=promo_enabled, context=log_context)
+        pipeline_result = await self._executor.execute(
+            query, slots, user_id=user_id, promo_enabled=promo_enabled,
+            context=log_context, similar_objects=similar_objects,
+        )
         search_ms = _ms(t_search)
         result = pipeline_result.get("result", {})
 

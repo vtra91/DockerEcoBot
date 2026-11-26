@@ -1,10 +1,11 @@
+import difflib
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 import json
 from sqlalchemy.orm import joinedload
 from sqlalchemy.dialects import postgresql
-from sqlalchemy import func, cast, text, String, Boolean, Float
+from sqlalchemy import func, cast, text, String, Boolean, Float, or_
 from ..domain.entities import ObjectResult, ResourceResult, ObjectCriteria, ResourceCriteria
 from .search_repository import SearchRepository
 from ..infrastructure.orm.object_models import Object, ObjectNameSynonym, ObjectType
@@ -123,6 +124,69 @@ class SQLAlchemySearchRepository(SearchRepository):
                 ) for obj in objects
             ], total
                           
+    def find_similar_objects_with_images(
+        self,
+        query: str,
+        object_type: Optional[str] = None,
+        exclude_db_id: Optional[str] = None,
+        limit: int = 3,
+        min_score: float = 0.2,
+    ) -> List[Dict[str, Any]]:
+        """Похожие по названию объекты, у которых точно есть изображения.
+
+        Использует pg_trgm similarity по синонимам (плюс ILIKE для вхождений),
+        фильтрует объекты без ресурсов модальности «Изображение».
+        """
+        q = (query or "").strip().lower().replace("ё", "е")
+        if not q:
+            return []
+
+        session = self._session_factory()
+        with session:
+            syn = func.lower(func.replace(ObjectNameSynonym.synonym, "ё", "е"))
+            score = func.similarity(syn, q)
+
+            qy = (
+                session.query(Object, func.max(score).label("score"))
+                .join(Object.synonyms)
+                .filter(or_(score >= min_score, syn.like(f"%{q}%")))
+                .filter(
+                    Object.resources.any(
+                        Resource.resource_values.any(
+                            ResourceValue.modality.has(Modality.modality_type == "Изображение")
+                        )
+                    )
+                )
+            )
+            if object_type:
+                qy = qy.join(Object.object_type).filter(ObjectType.name == object_type)
+            if exclude_db_id:
+                qy = qy.filter(Object.db_id != exclude_db_id)
+
+            rows = (
+                qy.group_by(Object.id)
+                .order_by(func.max(score).desc())
+                .limit(max(1, min(limit, 10)))
+                .all()
+            )
+
+            result: List[Dict[str, Any]] = []
+            for obj, match_score in rows:
+                synonyms = [s.synonym for s in obj.synonyms if s.synonym]
+                if synonyms:
+                    name = max(
+                        synonyms,
+                        key=lambda value: difflib.SequenceMatcher(None, q, value.lower()).ratio(),
+                    )
+                else:
+                    name = obj.db_id
+                result.append({
+                    "db_id": obj.db_id,
+                    "name": name,
+                    "score": float(match_score or 0),
+                })
+            return result
+
     def find_resources_by_criteria(self, criteria: ResourceCriteria, object_ids: Optional[List[int]] = None, limit: int = 50, offset: int = 0) -> Tuple[List[ResourceResult], int]:
         session = self._session_factory()
         with session:

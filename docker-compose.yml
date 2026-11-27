@@ -48,13 +48,13 @@ services:
     volumes:
       - ./maps:/app/maps
       - ./salut_bot/images:/app/images
-      - ./salut_bot/faq:/app/faq
+      - ./data/faq:/app/faq
       - ./salut_bot/embedding_models:/app/embedding_models
       - ./salut_bot/knowledge_base_scripts/Vector/faiss_index:/app/knowledge_base_scripts/Vector/faiss_index
       - ./logs:/app/logs
       - ./shared.env:/app/shared.env:ro
       - ./salut_bot/search_api/services/geo_map_service.py:/app/search_api/services/geo_map_service.py:ro
-      - ./EcoBotProject/DialogService/prompts:/app/prompts:ro
+      - ./data/prompts:/app/prompts:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DB_HOST=db
@@ -110,7 +110,7 @@ services:
       - ./shared.env
     volumes:
       - ./shared.env:/app/shared.env:ro
-      - ./EcoBotProject/DialogService/prompts:/app/prompts
+      - ./data/prompts:/app/prompts
     command: python api.py
     environment:
       - PYTHONUNBUFFERED=1
@@ -140,7 +140,7 @@ services:
       - ./data:/app/data
       - ./shared.env:/app/shared.env:ro
       - ./EcoBotProject/DialogService/adapters/max/presenter.py:/app/adapters/max/presenter.py:ro
-      - ./EcoBotProject/DialogService/prompts:/app/prompts:ro
+      - ./data/prompts:/app/prompts:ro
     command: python main_max.py
     expose:
       - "8080"

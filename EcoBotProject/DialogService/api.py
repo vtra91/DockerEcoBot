@@ -1,6 +1,8 @@
 import os
+import shutil
 import asyncio
 import logging
+from pathlib import Path
 import aiohttp
 import redis.asyncio as aioredis
 from contextlib import asynccontextmanager
@@ -16,6 +18,31 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+PROMPTS_DIR = Path("/app/prompts")
+PROMPTS_DEFAULTS_DIR = Path("/app/prompts_defaults")
+
+
+def _seed_prompts() -> None:
+    """Заполняет постоянный каталог промптов заводскими значениями (один раз).
+
+    /app/prompts примонтирован как volume (data/prompts) и после первого запуска
+    может быть пустым. Копируем туда дефолты из /app/prompts_defaults, не
+    перезаписывая уже изменённые администратором файлы.
+    """
+    try:
+        if not PROMPTS_DEFAULTS_DIR.exists():
+            return
+        PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+        for src in PROMPTS_DEFAULTS_DIR.glob("*.txt"):
+            dst = PROMPTS_DIR / src.name
+            if not dst.exists():
+                shutil.copyfile(src, dst)
+    except Exception as exc:
+        logger.warning("Prompt seeding failed: %s", exc)
+
+
+_seed_prompts()
 
 
 @asynccontextmanager

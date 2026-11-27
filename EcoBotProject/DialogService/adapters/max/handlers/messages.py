@@ -45,12 +45,15 @@ def register_message_handlers(dp: Dispatcher, bot: Bot) -> None:
             router_enabled = router_val == "1"
             similar_val = await ctx.redis_client.get("settings:similar_objects")
             similar_objects_enabled = similar_val != "0"
+            two_stage_val = await ctx.redis_client.get("settings:two_stage_classifier")
+            two_stage_classifier = two_stage_val != "0"
             result = await ctx.orchestrator.process(
                 text, user_id=str(chat_id),
                 promo_enabled=promo_enabled,
                 multi_act_enabled=multi_act_enabled,
                 router_enabled=router_enabled,
                 similar_objects_enabled=similar_objects_enabled,
+                two_stage_classifier=two_stage_classifier,
             )
             await render_pipeline_result(bot, chat_id, result, ctx.session)
 

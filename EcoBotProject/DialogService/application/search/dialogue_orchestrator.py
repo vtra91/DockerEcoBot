@@ -392,7 +392,8 @@ class DialogueOrchestrator:
     async def process(self, query: str, user_id: str | None = None, promo_enabled: bool | None = None,
                       multi_act_enabled: bool | None = None,
                       router_enabled: bool | None = None,
-                      similar_objects_enabled: bool | None = None) -> dict:
+                      similar_objects_enabled: bool | None = None,
+                      two_stage_classifier: bool | None = None) -> dict:
         """Полный цикл: классификация → мердж контекста → поиск → проактивность."""
         t0 = time.monotonic()
         router_on = _router_enabled(router_enabled)
@@ -463,7 +464,12 @@ class DialogueOrchestrator:
         # Передаём предыдущий запрос и промо в LLM — для разрешения местоимений
         prev_promo = prev.promo_objects if prev else []
         t_classify = time.monotonic()
-        slots = await self._classifier.classify(query, prev_query=prev.query if prev else None, prev_promo=prev_promo)
+        slots = await self._classifier.classify(
+            query,
+            prev_query=prev.query if prev else None,
+            prev_promo=prev_promo,
+            two_stage=two_stage_classifier,
+        )
         classify_ms = _ms(t_classify)
 
         if slots.get("error") and user_id and self._executor._session:

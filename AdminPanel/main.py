@@ -154,6 +154,7 @@ async def _init_redis_settings():
     await settings_redis.set("settings:multi_act_dialog", "1", nx=True)
     await settings_redis.set("settings:semantic_router", "0", nx=True)
     await settings_redis.set("settings:similar_objects", "1", nx=True)
+    await settings_redis.set("settings:two_stage_classifier", "1", nx=True)
 
 
 CORE_API_BASE = os.getenv("CORE_API_BASE", "http://core-api:5001")
@@ -419,6 +420,21 @@ async def set_similar_objects_setting(request: Request, data: dict = Body(...)):
     return {"similar_objects_enabled": enabled}
 
 
+@app.get("/chat/two-stage-classifier-setting")
+async def get_two_stage_classifier_setting(request: Request):
+    val = await settings_redis.get("settings:two_stage_classifier")
+    return {"two_stage_classifier": val != "0"}
+
+
+@app.post("/chat/two-stage-classifier-setting")
+async def set_two_stage_classifier_setting(request: Request, data: dict = Body(...)):
+    if not request.session.get("user_id"):
+        raise HTTPException(status_code=401)
+    enabled = bool(data.get("enabled", True))
+    await settings_redis.set("settings:two_stage_classifier", "1" if enabled else "0")
+    return {"two_stage_classifier": enabled}
+
+
 @app.post("/chat/search")
 async def search_proxy(request: Request, data: dict = Body(...)):
     user_id = request.session.get("user_id")
@@ -432,6 +448,7 @@ async def search_proxy(request: Request, data: dict = Body(...)):
     multi_act_enabled = (await settings_redis.get("settings:multi_act_dialog")) != "0"
     router_enabled = (await settings_redis.get("settings:semantic_router")) == "1"
     similar_objects_enabled = (await settings_redis.get("settings:similar_objects")) != "0"
+    two_stage_classifier = (await settings_redis.get("settings:two_stage_classifier")) != "0"
     async with httpx.AsyncClient(timeout=httpx.Timeout(150.0)) as client:
         try:
             response = await client.post(
@@ -439,7 +456,8 @@ async def search_proxy(request: Request, data: dict = Body(...)):
                 json={"query": query, "user_id": user_id, "promo_enabled": promo_enabled,
                       "multi_act_enabled": multi_act_enabled,
                       "router_enabled": router_enabled,
-                      "similar_objects_enabled": similar_objects_enabled}
+                      "similar_objects_enabled": similar_objects_enabled,
+                      "two_stage_classifier": two_stage_classifier}
             )
             return response.json()
         except Exception as e:
@@ -704,6 +722,8 @@ async def settings_page(request: Request):
     semantic_router_enabled = router_val == "1"
     similar_val = await settings_redis.get("settings:similar_objects")
     similar_objects_enabled = similar_val != "0"
+    two_stage_val = await settings_redis.get("settings:two_stage_classifier")
+    two_stage_classifier_enabled = two_stage_val != "0"
 
     # FAQ: серверное управление (без JS) — вкладка, вид, форма, сообщения
     faq_view = request.query_params.get("view", "list")
@@ -739,6 +759,7 @@ async def settings_page(request: Request):
         "multi_act_enabled": multi_act_enabled,
         "semantic_router_enabled": semantic_router_enabled,
         "similar_objects_enabled": similar_objects_enabled,
+        "two_stage_classifier_enabled": two_stage_classifier_enabled,
         "schema": _load_config_schema(),
     })
 

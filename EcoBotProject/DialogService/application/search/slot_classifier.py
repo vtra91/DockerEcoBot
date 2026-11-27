@@ -256,52 +256,6 @@ def _get_prompt_template() -> str:
     return CLASSIFICATION_PROMPT
 
 
-_INTENT_PROMPT_FILE = Path(__file__).parent.parent.parent / "prompts" / "classifier_intent_prompt.txt"
-_ATTRIBUTE_PROMPT_FILE = Path(__file__).parent.parent.parent / "prompts" / "attribute_prompt.txt"
-
-_INTENT_PROMPT_FALLBACK = """Ты — классификатор запросов эко-бота о Байкальском регионе.
-Верни JSON: object_type (Объект флоры и фауны / Географический объект / Услуга / null),
-synonym (конкретное название или null), extra ({{}}), modality (Текст / Изображение / Геоданные).
-
-{context}
-<user_query>
-{query}
-</user_query>
-
-{{"object_type": "...", "synonym": "...", "extra": {{}}, "modality": "..."}}
-"""
-
-_ATTRIBUTE_PROMPT_FALLBACK = """Ты — извлекатель свойств и признаков для эко-бота о Байкальском регионе.
-Верни JSON: properties и features — только то, что явно есть в запросе.
-
-modality: {modality}
-{context}
-<user_query>
-{query}
-</user_query>
-
-{{"properties": {{}}, "features": {{}}}}
-"""
-
-
-def _get_intent_prompt() -> str:
-    if _INTENT_PROMPT_FILE.exists():
-        try:
-            return _INTENT_PROMPT_FILE.read_text(encoding="utf-8")
-        except Exception:
-            pass
-    return _INTENT_PROMPT_FALLBACK
-
-
-def _get_attribute_prompt() -> str:
-    if _ATTRIBUTE_PROMPT_FILE.exists():
-        try:
-            return _ATTRIBUTE_PROMPT_FILE.read_text(encoding="utf-8")
-        except Exception:
-            pass
-    return _ATTRIBUTE_PROMPT_FALLBACK
-
-
 # ── Нормализация галлюцинаций LLM ─────────────────────────────────────────────
 
 _OBJECT_TYPE_ALIASES = {
@@ -650,52 +604,6 @@ class SlotResult(BaseModel):
         return _OBJECT_TYPE_ALIASES.get(v, v)
 
 
-class IntentResult(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    object_type: Optional[Literal["Объект флоры и фауны", "Географический объект", "Услуга"]] = None
-    synonym: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
-    modality: Literal["Текст", "Изображение", "Геоданные"] = "Текст"
-
-    @field_validator('object_type', mode='before')
-    @classmethod
-    def normalize_object_type(cls, v):
-        return _OBJECT_TYPE_ALIASES.get(v, v)
-
-
-class AttributesResult(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    properties: Dict[str, Any] = Field(default_factory=dict)
-    features: Dict[str, Any] = Field(default_factory=dict)
-
-
-def _two_stage_enabled(flag: bool | None) -> bool:
-    """True — двухступенчатый классификатор (интент → признаки/свойства)."""
-    if flag is not None:
-        return bool(flag)
-    raw = os.getenv("TWO_STAGE_CLASSIFIER_ENABLED", "1").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
-
-
-_ATTRIBUTE_RE = re.compile(
-    r"лет|зим|весн|осен|цвет|плод|облач|ясн|пасмур|переменн|"
-    r"лес|луг|гор|озер|реч|берег|болот|степ|пол|сад|мор|пустын|побереж|"
-    r"актив|пита|корм|размер|масс|вес|обита|мест|ареал|"
-    r"редк|краснокниж|эндем|"
-    r"байкал|ольхон|иркутск|баргузин|листвян|"
-    r"музе|заповедн|заказник|нацпарк|турбаз|"
-    r"город|посел|село|остров|мыс|залив|хребет|пещер|маяк|памятник|достопримеч|храм|источник",
-    re.IGNORECASE,
-)
-
-
-def _need_attributes(query: str, slots: dict) -> bool:
-    """Для «только фото» без слов-признаков второй слой не нужен."""
-    if slots.get("modality") != "Изображение":
-        return True
-    return bool(_ATTRIBUTE_RE.search(query))
-
-
 def _determine_template(slots: dict) -> Optional[str]:
     obj_type = slots.get("object_type")
     synonym = slots.get("synonym")
@@ -774,22 +682,18 @@ class SlotClassifier:
     def __init__(self, provider: str = "qwen", valid_features: Optional[Dict[str, Set[str]]] = None):
         self._provider = provider
         self._valid_features = valid_features
-        self._init_parsers(provider)
-
-    def _init_parsers(self, provider: str) -> None:
         llm = LLMFactory.get_model(provider)
         self.parser = llm.with_structured_output(SlotResult, method="json_mode")
-        self._intent_parser = llm.with_structured_output(IntentResult, method="json_mode")
-        self._attr_parser = llm.with_structured_output(AttributesResult, method="json_mode")
 
     def reload(self) -> None:
         provider = os.getenv("LLM_PROVIDER", self._provider)
-        self._init_parsers(provider)
+        llm = LLMFactory.get_model(provider)
+        self.parser = llm.with_structured_output(SlotResult, method="json_mode")
         self._provider = provider
 
-    @staticmethod
-    def _build_context(prev_query: str | None, prev_promo: list | None) -> str:
+    async def classify(self, query: str, prev_query: str | None = None, prev_promo: list | None = None) -> dict:
         context_parts = []
+
         if prev_query:
             context_parts.append(
                 f"Предыдущий запрос пользователя: «{prev_query}»\n"
@@ -797,6 +701,7 @@ class SlotClassifier:
                 f"(«он», «она», «его», «её», «нём», «ней», «там», «это», «туда» и т.п.). "
                 f"Не переноси слоты из предыдущего запроса — классифицируй только текущий."
             )
+
         if prev_promo:
             names = "; ".join(
                 f"«{item.get('name', '')}» (тип: {item.get('object_type', '')})"
@@ -807,104 +712,35 @@ class SlotClassifier:
                 f"Если текущий запрос ссылается на один из них (через «эту», «про неё», «подробнее», «расскажи об этом» и т.п.) — "
                 f"укажи его название в synonym и соответствующий object_type."
             )
+
         if context_parts:
-            return "\n═══ КОНТЕКСТ ДИАЛОГА ═══\n" + "\n".join(context_parts) + "\n"
-        return ""
+            context = "\n═══ КОНТЕКСТ ДИАЛОГА ═══\n" + "\n".join(context_parts) + "\n"
+        else:
+            context = ""
 
-    async def classify(self, query: str, prev_query: str | None = None, prev_promo: list | None = None,
-                       two_stage: bool | None = None) -> dict:
-        context = self._build_context(prev_query, prev_promo)
-        logger.info(
-            f"🔍 Classifying: '{query}'"
-            + (f" | prev: '{prev_query}'" if prev_query else "")
-            + (f" | promo: {[p.get('name') for p in (prev_promo or [])]}" if prev_promo else "")
-        )
-        if _two_stage_enabled(two_stage):
-            return await self._classify_two_stage(query, context)
-        return await self._classify_single(query, context)
-
-    async def _classify_single(self, query: str, context: str) -> dict:
         prompt = _get_prompt_template().format(context=context, query=query)
+        logger.info(f"🔍 Classifying: '{query}'" + (f" | prev: '{prev_query}'" if prev_query else "") + (f" | promo: {[p.get('name') for p in (prev_promo or [])]}" if prev_promo else ""))
         try:
             result: SlotResult = await self.parser.ainvoke(prompt)
             raw_slots = result.model_dump()
+
             slots = result.model_dump()
             slots = _post_process_slots(query, slots, self._valid_features)
             slots["template"] = _determine_template(slots)
             slots["modality_ambiguous"] = _detect_ambiguity(query, slots["modality"])
             slots["_debug_llm_raw"] = raw_slots
-            logger.info(
-                f"🔍 [single] Raw LLM slots: synonym={slots.get('synonym')!r} "
-                f"object_type={slots.get('object_type')!r} modality={slots.get('modality')!r} "
-                f"features={slots.get('features')}"
-            )
+            logger.info(f"🔍 Raw LLM slots: synonym={slots.get('synonym')!r} object_type={slots.get('object_type')!r} modality={slots.get('modality')!r} features={slots.get('features')}")
             return slots
         except Exception as e:
-            return self._error_slots(e)
-
-    async def _classify_two_stage(self, query: str, context: str) -> dict:
-        try:
-            intent_prompt = _get_intent_prompt().format(context=context, query=query)
-            intent: IntentResult = await self._intent_parser.ainvoke(intent_prompt)
-            intent_raw = intent.model_dump()
-        except Exception as e:
-            return self._error_slots(e)
-
-        slots = {
-            "object_type": intent_raw.get("object_type"),
-            "synonym": intent_raw.get("synonym"),
-            "extra": intent_raw.get("extra") or {},
-            "modality": intent_raw.get("modality") or "Текст",
-            "properties": {},
-            "features": {},
-        }
-
-        attrs_raw = {"properties": {}, "features": {}}
-        if _need_attributes(query, slots):
-            try:
-                attr_prompt = _get_attribute_prompt().format(
-                    context=context,
-                    query=query,
-                    object_type=slots.get("object_type") or "—",
-                    synonym=slots.get("synonym") or "—",
-                    modality=slots.get("modality") or "Текст",
-                )
-                attrs: AttributesResult = await self._attr_parser.ainvoke(attr_prompt)
-                attrs_raw = attrs.model_dump()
-                slots["properties"] = attrs_raw.get("properties") or {}
-                slots["features"] = attrs_raw.get("features") or {}
-            except Exception as e:
-                logger.warning(f"Attribute classifier failed, using empty attrs: {e}")
-
-        raw_slots = {
-            "object_type": slots["object_type"],
-            "synonym": slots["synonym"],
-            "properties": dict(slots["properties"]),
-            "features": dict(slots["features"]),
-            "extra": dict(slots["extra"]),
-            "modality": slots["modality"],
-        }
-        slots = _post_process_slots(query, slots, self._valid_features)
-        slots["template"] = _determine_template(slots)
-        slots["modality_ambiguous"] = _detect_ambiguity(query, slots["modality"])
-        slots["_debug_llm_raw"] = raw_slots
-        logger.info(
-            f"🔍 [two-stage] intent={intent_raw} attrs={attrs_raw} -> "
-            f"synonym={slots.get('synonym')!r} features={slots.get('features')}"
-        )
-        return slots
-
-    @staticmethod
-    def _error_slots(exc: Exception) -> dict:
-        logger.error(f"SlotClassifier error: {exc}")
-        return {
-            "object_type": None,
-            "synonym": None,
-            "properties": {},
-            "features": {},
-            "extra": {},
-            "modality": "Текст",
-            "modality_ambiguous": False,
-            "template": None,
-            "error": str(exc),
-        }
+            logger.error(f"SlotClassifier error: {e}")
+            return {
+                "object_type": None,
+                "synonym": None,
+                "properties": {},
+                "features": {},
+                "extra": {},
+                "modality": "Текст",
+                "modality_ambiguous": False,
+                "template": None,
+                "error": str(e)
+            }

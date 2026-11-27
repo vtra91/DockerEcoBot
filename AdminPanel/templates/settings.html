@@ -72,11 +72,7 @@ block content %}
       распределяет сообщение между поиском, small-talk и бранью.', 'answer_prompt.txt':
       'Системный промпт генератора финального ответа по базе знаний.', 'smalltalk_prompt.txt':
       'Промпт ответов на small-talk. Блок {faq} подставляет правила FAQ;'
-      ' если блок пуст — правила не применяются, модель отвечает как обычно.',
-      'classifier_intent_prompt.txt': 'Первый слой двухслойного классификатора: только интент —'
-      ' object_type, synonym, modality, extra.',
-      'attribute_prompt.txt': 'Второй слой: извлекает properties и features из запроса'
-      ' по разрешённому каталогу.' } %}
+      ' если блок пуст — правила не применяются, модель отвечает как обычно.' } %}
       <form id="form-prompts">
         {% for filename, content in prompts.items() %}
         <div class="mb-4">
@@ -278,7 +274,7 @@ block content %}
   type="checkbox"
   id="toggle-{{ field.key }}"
   style="width: 2.5em; height: 1.3em"
-  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) or (field.key == 'semantic_router' and semantic_router_enabled) or (field.key == 'similar_objects' and similar_objects_enabled) or (field.key == 'two_stage_classifier' and two_stage_classifier_enabled) %}checked{% endif %}
+  {% if (field.key == 'promo_enabled' and promo_enabled) or (field.key == 'multi_act_dialog' and multi_act_enabled) or (field.key == 'semantic_router' and semantic_router_enabled) or (field.key == 'similar_objects' and similar_objects_enabled) %}checked{% endif %}
 />
                 <label
                   class="form-check-label fw-bold ms-1"
@@ -513,28 +509,6 @@ block content %}
             e.target.checked
               ? "Подсказки похожих объектов включены"
               : "Подсказки похожих объектов выключены",
-            "success",
-          );
-        } catch {
-          showToast("Ошибка при сохранении", "danger");
-        }
-      });
-    }
-
-    // Two-stage classifier toggle
-    const twoStageToggle = document.getElementById("toggle-two_stage_classifier");
-    if (twoStageToggle) {
-      twoStageToggle.addEventListener("change", async (e) => {
-        try {
-          await fetch("{{ ADMIN_PREFIX }}/chat/two-stage-classifier-setting", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ enabled: e.target.checked }),
-          });
-          showToast(
-            e.target.checked
-              ? "Двухслойный классификатор включён"
-              : "Двухслойный классификатор выключен",
             "success",
           );
         } catch {

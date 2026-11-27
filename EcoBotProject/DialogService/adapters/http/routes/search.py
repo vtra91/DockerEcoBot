@@ -37,23 +37,7 @@ async def classify_query(request: Request, data: dict = Body(...)):
         raise HTTPException(status_code=400, detail="query required")
     provider = os.getenv("LLM_PROVIDER", "qwen")
     classifier = SlotClassifier(provider=provider, valid_features=request.app.state.valid_features)
-
-    # Тумблер двухслойной классификации: тело запроса или Redis.
-    two_stage: bool | None = data.get("two_stage_classifier")
-    if two_stage is None:
-        try:
-            redis_host = os.getenv("REDIS_HOST", "redis")
-            redis_port = int(os.getenv("REDIS_PORT", "6379"))
-            client = redis.Redis(host=redis_host, port=redis_port, db=0, decode_responses=True)
-            try:
-                val = await client.get("settings:two_stage_classifier")
-                two_stage = val != "0"
-            finally:
-                await client.aclose()
-        except Exception:
-            two_stage = None
-
-    return await classifier.classify(query, two_stage=two_stage)
+    return await classifier.classify(query)
 
 
 @router.post("/search_pipeline")
@@ -66,13 +50,11 @@ async def search_pipeline(request: Request, data: dict = Body(...)):
     multi_act_enabled: bool | None = data.get("multi_act_enabled")
     router_enabled: bool | None = data.get("router_enabled")
     similar_objects_enabled: bool | None = data.get("similar_objects_enabled")
-    two_stage_classifier: bool | None = data.get("two_stage_classifier")
     orchestrator = _make_orchestrator(request)
     return await orchestrator.process(query, user_id=user_id, promo_enabled=promo_enabled,
                                       multi_act_enabled=multi_act_enabled,
                                       router_enabled=router_enabled,
-                                      similar_objects_enabled=similar_objects_enabled,
-                                      two_stage_classifier=two_stage_classifier)
+                                      similar_objects_enabled=similar_objects_enabled)
 
 
 @router.post("/callback_simplify")
